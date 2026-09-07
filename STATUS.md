@@ -163,3 +163,34 @@ gemischtes Mehr-Epochen-BC. On-the-fly-Streaming erst für Self-Play.
 1. Volle Materialisierung ~5.116 Records, 2 Commit-Checkouts, fleet-parallel → ~205 GB (~2-4h).
 2. bc_real.py → echten Trainer: Multi-Spiel-Shuffle-Loader + Epochen + Checkpoint/Resume
    (bc_train.py hat Resume schon) → BC-Lauf auf der 5080.
+
+## Container-Image gebaut + verifiziert (2026-09-07)
+Flotte: 44 Kerne/58 Threads — Arch 8/16, M4 14, apollo-m2 8, apollo 6/12, node-1/2 je 4.
+Docker auf allen Linux-Knoten (29.x). Deps über beide Commits IDENTISCH → ein Image.
+env/Dockerfile → of-mat (3.5GB): Node+Engine+env, ENTRYPOINT-Wrapper wählt COMMIT zur
+Laufzeit, cairo-Libs für canvas. materialize.ts --list (viele Records/Prozess, resume-fest).
+Im Container getestet: --cpus=4, identische Shards (1397 Samples/22s). 
+User-Vorgaben: apollo-m2 NATIV (kein Container), M4 NICHT anfassen, apollo CPU-gedeckelt (Jellyfin).
+
+## Für den vollen Lauf (nach GO + du-Scan):
+1. Image an node-1/node-2/apollo verteilen (docker save|ssh load, ~3.5GB).
+2. Fetch alle gerankten (12.967, ~4.6h node-1). 3. Records→Arch.
+4. Materialisieren: Liste nach Commit gruppieren, je Knoten Container --cpus + --list;
+   apollo-m2 nativ. Filter K=30 (Angriff max 1/Spieler/30 Ticks) → ~470GB.
+5. bc_train auf echte Shards.
+
+## VOLLER LAUF GESTARTET (2026-09-07, GO)
+- FETCH: node-1 systemd of-fetch, alle gerankten 12.967 (night/allranked.txt), ~0.8/s ~4.6h
+  → Ziel ~18.083 Records in ~/openfront-night/records.
+- PHASE-1 MATERIALISIERUNG: Arch systemd of-mat1, die 5.050 vorhandenen Records, 28 Container
+  (2 Commits × 14), --cpus=1, resume-fest → data/shards. ~2h.
+- Image of-mat auf node-2 + apollo verteilt (node-1 nach Fetch).
+- scraper/mat_launch.py: Launcher je Knoten (gruppiert nach Commit, N parallele Container).
+  Merke: N so wählen, dass N×Commits ≈ Kerne (Phase1 hat 28 auf 16 Threads → leicht über, ok).
+- Monitor b4k67hy5l wacht über beide (Abschluss/Fehler).
+
+## Phase 2 (nach Fetch): die neuen ~13k materialisieren, fleet-verteilt
+Records auf node-1 → an Arch/node-2/apollo verteilen (oder je Knoten Chunk), mat_launch je Knoten:
+Arch n=7, node-2 n=2, apollo n=3 (Jellyfin-schonend), node-1 n=2. Dann bc_train auf alle Shards.
+FILTER K=30 ist noch NICHT im Materializer — aktuell wird JEDE Entscheidung gespeichert
+(→ ~205GB für 5116, hochgerechnet ~700GB für 18k). Vor Phase 2 K=30 einbauen ODER Platte prüfen.

@@ -79,8 +79,11 @@ async function run(file: string, outdir: string) {
   const u8 = new Uint8Array(MAPLEN);
   const lenBuf = Buffer.allocUnsafe(4);
 
-  let samples = 0, scannedTick = -1;
+  let samples = 0, scannedTick = -1, thinned = 0;
   const t0 = performance.now();
+  // Ausduennen: pro Spieler max 1 Angriff je THIN Ticks (Rest immer behalten).
+  const THIN = Number(process.env.THIN ?? 30);
+  const lastAttack = new Map<string, number>();
 
   for (const turn of record.turns) {
     const intents = turn.intents ?? [];
@@ -93,6 +96,13 @@ async function run(file: string, outdir: string) {
         const cid = (intent as any).clientID;
         const player = game.players().find((p) => p.clientID() === cid);
         if (!player || !player.isAlive()) continue;
+
+        // Angriffs-Ausduennung: schnelle Re-Klicks desselben Spielers weglassen
+        if (THIN > 0 && (intent as any).type === "attack") {
+          const la = lastAttack.get(cid);
+          if (la !== undefined && turn.turnNumber - la < THIN) { thinned++; continue; }
+          lastAttack.set(cid, turn.turnNumber);
+        }
 
         let ctx = ctxCache.get(cid);
         let zblock = mapCache.get(cid);
@@ -142,7 +152,7 @@ async function run(file: string, outdir: string) {
 
   const mb = fs.statSync(mapsPath).size / 1e6;
   console.log(`${info.gameID} ${info.config.gameMap}: ${samples} Samples, maps ${mb.toFixed(1)} MB ` +
-    `(${(mb * 1000 / Math.max(samples, 1)).toFixed(1)} KB/Sample), ${((performance.now() - t0) / 1000).toFixed(0)}s`);
+    `(${(mb * 1000 / Math.max(samples, 1)).toFixed(1)} KB/Sample, ${thinned} ausgeduennt), ${((performance.now() - t0) / 1000).toFixed(0)}s`);
 }
 
 async function main() {
