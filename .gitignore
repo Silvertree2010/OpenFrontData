@@ -1,0 +1,12 @@
+# Große/regenerierbare Daten — nie ins Repo
+data/
+.venv/
+vendor/
+node_modules
+logs/
+*.maps
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+viz/data/

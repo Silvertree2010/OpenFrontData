@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frontarchiv</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Karla:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap">
+<style>
+  :root {
+    --ground:#F0EEE6; --surface:#FAF9F5; --sunken:#E6E3D8;
+    --ink:#141413; --ink-2:#6B6862; --ink-3:#97938A;
+    --line:#DEDBD1; --accent:#C15F3C; --accent-2:#CC785C;
+    --water:#E4E1D6; --void:#D6D2C4;
+    --serif:"Newsreader",Georgia,serif;
+    --sans:"Karla",-apple-system,"Segoe UI",Helvetica,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) {
+    --ground:#171612; --surface:#1F1E19; --sunken:#262521;
+    --ink:#F0EEE6; --ink-2:#A8A49A; --ink-3:#7A766D;
+    --line:#2F2E28; --accent:#E08A66; --accent-2:#D4A27F;
+    --water:#201F1A; --void:#191814;
+  }}
+  :root[data-theme=dark] {
+    --ground:#171612; --surface:#1F1E19; --sunken:#262521;
+    --ink:#F0EEE6; --ink-2:#A8A49A; --ink-3:#7A766D;
+    --line:#2F2E28; --accent:#E08A66; --accent-2:#D4A27F;
+    --water:#201F1A; --void:#191814;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--ground);color:var(--ink);
+       font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  [hidden]{display:none!important}
+
+  .app{display:grid;grid-template-columns:288px minmax(0,1fr) 296px;
+       grid-template-rows:auto 1fr;height:100vh;gap:0}
+  @media (max-width:1280px){.app{grid-template-columns:250px minmax(0,1fr);}
+    .rail-r{display:none}}
+  @media (max-width:860px){.app{grid-template-columns:1fr;grid-template-rows:auto auto 1fr}
+    .rail-l{max-height:230px}}
+
+  /* ---------- Kopfleiste ---------- */
+  .top{grid-column:1/-1;display:flex;align-items:baseline;gap:20px;flex-wrap:wrap;
+       padding:14px 22px;border-bottom:1px solid var(--line);background:var(--surface)}
+  .top h1{font-family:var(--serif);font-weight:400;font-size:25px;margin:0;letter-spacing:-.01em}
+  .top .sub{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+  .top .spacer{flex:1}
+  .top .now{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+  .top .now b{color:var(--ink);font-weight:500}
+
+  /* ---------- Linke Leiste: Archiv ---------- */
+  .rail-l{border-right:1px solid var(--line);background:var(--surface);
+          display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .filters{padding:11px 13px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+  .filters input,.filters select{
+    font-family:var(--sans);font-size:13px;padding:6px 9px;width:100%;
+    background:var(--ground);color:var(--ink);border:1px solid var(--line)}
+  .filters input:focus,.filters select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  .frow{display:flex;gap:7px}
+  .glist{overflow-y:auto;flex:1;min-height:0}
+  .gitem{padding:9px 13px;border-bottom:1px solid var(--line);cursor:pointer;display:block;width:100%;
+         text-align:left;background:none;border-left:2px solid transparent;font-family:var(--sans)}
+  .gitem:hover{background:var(--sunken)}
+  .gitem[aria-current=true]{background:var(--sunken);border-left-color:var(--accent)}
+  .gitem .m{font-size:13.5px;font-weight:600;display:block;line-height:1.25;
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gitem .d{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);display:flex;gap:9px;margin-top:2px}
+  .gitem .d .elo{color:var(--accent)}
+  .count{padding:8px 13px;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+         border-bottom:1px solid var(--line)}
+
+  /* ---------- Mitte: Bühne ---------- */
+  .mid{display:flex;flex-direction:column;min-width:0;min-height:0;padding:18px 22px;gap:13px;overflow-y:auto}
+  .board{position:relative;background:var(--surface);border:1px solid var(--line);padding:12px}
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated;cursor:crosshair}
+  .tip{position:absolute;pointer-events:none;opacity:0;background:var(--ink);color:var(--ground);
+       font-family:var(--mono);font-size:11.5px;padding:5px 9px;white-space:nowrap;z-index:5}
+  .tip.on{opacity:1}
+  .veil{position:absolute;inset:0;display:grid;place-items:center;background:var(--surface);
+        font-family:var(--mono);font-size:12.5px;color:var(--ink-3)}
+
+  .transport{display:flex;align-items:center;gap:13px;flex-wrap:wrap}
+  button{font-family:var(--sans);font-size:14px;font-weight:500;background:var(--surface);
+         color:var(--ink);border:1px solid var(--line);padding:7px 15px;cursor:pointer}
+  button:hover{border-color:var(--ink-3)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#FFF8F4;min-width:96px}
+  button.primary:hover{background:var(--accent-2);border-color:var(--accent-2)}
+  .speeds{display:flex}
+  .speeds button{border-right-width:0;padding:7px 10px;font-family:var(--mono);font-size:11.5px}
+  .speeds button:last-child{border-right-width:1px}
+  .speeds button[aria-pressed=true]{background:var(--sunken)}
+  input[type=range]{flex:1;min-width:180px;accent-color:var(--accent);height:22px;cursor:pointer;background:transparent}
+  .clock{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .clock b{color:var(--ink);font-weight:500}
+
+  .strip{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);flex-wrap:wrap}
+  .strip>div{background:var(--surface);padding:9px 14px;flex:1;min-width:104px}
+  .strip .n{font-family:var(--mono);font-size:18px;font-variant-numeric:tabular-nums;line-height:1.2}
+  .strip .l{font-size:11.5px;color:var(--ink-3)}
+
+  /* ---------- Rechte Leiste ---------- */
+  .rail-r{border-left:1px solid var(--line);background:var(--surface);
+          display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .panel{display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--line)}
+  .panel:last-child{border-bottom:0}
+  .panel h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+            color:var(--ink-3);font-weight:400;margin:0;padding:11px 14px 9px;
+            border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+  .rows{overflow-y:auto;padding:5px 0;flex:1;min-height:0}
+  .row{display:grid;grid-template-columns:11px 1fr auto;align-items:center;gap:9px;
+       padding:4px 14px;cursor:pointer;position:relative}
+  .row:hover,.row.sel{background:var(--sunken)}
+  .row .sw{width:10px;height:10px;border-radius:2px}
+  .row .who{min-width:0}
+  .row .nm{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;line-height:1.3}
+  .row .clan{font-family:var(--mono);font-size:9.5px;color:var(--ink-3)}
+  .row .val{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+  .row .bar{position:absolute;left:0;bottom:1px;height:2px;opacity:.5}
+  .feed{overflow-y:auto;padding:7px 14px 11px;flex:1;min-height:0}
+  .ev{font-size:12px;color:var(--ink-3);padding:2px 0;display:grid;grid-template-columns:44px 1fr;gap:8px}
+  .ev time{font-family:var(--mono);font-size:10.5px;font-variant-numeric:tabular-nums}
+  .ev .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ev.human .n{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <h1>Frontarchiv</h1>
+    <span class="sub" id="sub"></span>
+    <span class="spacer"></span>
+    <span class="now" id="now"></span>
+  </div>
+
+  <div class="rail-l">
+    <div class="filters">
+      <input id="q" type="search" placeholder="Karte oder Kennung suchen…" aria-label="Suche">
+      <div class="frow">
+        <select id="fmode" aria-label="Modus"><option value="">alle Modi</option></select>
+        <select id="fsort" aria-label="Sortierung">
+          <option value="elo">stärkster Spieler</option>
+          <option value="humans">meiste Menschen</option>
+          <option value="map">Karte A–Z</option>
+          <option value="len">längste Partie</option>
+        </select>
+      </div>
+    </div>
+    <div class="count" id="count"></div>
+    <div class="glist" id="glist"></div>
+  </div>
+
+  <div class="mid">
+    <div class="board">
+      <canvas id="cv" width="180" height="90"></canvas>
+      <div class="tip" id="tip"></div>
+      <div class="veil" id="veil">Partie wählen</div>
+    </div>
+    <div class="transport">
+      <button class="primary" id="play" disabled>Abspielen</button>
+      <div class="speeds" id="speeds">
+        <button data-s="0.5">0,5×</button><button data-s="1" aria-pressed="true">1×</button>
+        <button data-s="2">2×</button><button data-s="4">4×</button><button data-s="8">8×</button>
+      </div>
+      <input type="range" id="scrub" min="0" max="0" value="0" step="1" aria-label="Zeitpunkt" disabled>
+      <span class="clock" id="clock">--:-- / --:--</span>
+    </div>
+    <div class="strip" id="strip"></div>
+  </div>
+
+  <div class="rail-r">
+    <div class="panel" style="flex:2">
+      <h2><span>Rangliste</span><span>nach Fläche</span></h2>
+      <div class="rows" id="lb"></div>
+    </div>
+    <div class="panel" style="flex:1">
+      <h2><span>Ausgeschieden</span></h2>
+      <div class="feed" id="feed"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = (n) => n.toLocaleString("de-DE");
+const mmss = (t) => { const s = Math.round(t/10);
+  return String((s/60)|0).padStart(2,"0")+":"+String(s%60).padStart(2,"0"); };
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// ---------- Farbe: einmal aufloesen, dann cachen ----------
+const rgb = (() => {
+  const c = document.createElement("canvas").getContext("2d", {willReadFrequently:true});
+  const cache = new Map();
+  return (css) => {
+    let v = cache.get(css);
+    if (v) return v;
+    c.fillStyle = css; c.fillRect(0,0,1,1);
+    const d = c.getImageData(0,0,1,1).data;
+    v = [d[0],d[1],d[2]]; cache.set(css,v); return v;
+  };
+})();
+
+function unrle(arr, out){ let i=0;
+  for(let k=0;k<arr.length;k+=2){ const v=arr[k]; let n=arr[k+1]; while(n-->0) out[i++]=v; }
+  return out; }
+
+// ================= Archiv =================
+let CATALOG = [], current = null;
+
+fetch("index.json").then(r=>r.json()).then(list => {
+  CATALOG = list;
+  const modes = [...new Set(list.map(x=>x.mode))].sort();
+  $("fmode").insertAdjacentHTML("beforeend",
+    modes.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join(""));
+  $("sub").textContent = `${list.length} Partien · ${new Set(list.map(x=>x.map)).size} Karten`;
+  renderList();
+  const want = location.hash.slice(1);
+  load(CATALOG.find(x=>x.id===want) || CATALOG[0]);
+}).catch(e => { $("veil").textContent = "index.json nicht ladbar — über einen lokalen Server öffnen."; });
+
+function filtered(){
+  const q = $("q").value.trim().toLowerCase(), m = $("fmode").value, s = $("fsort").value;
+  let r = CATALOG.filter(x =>
+    (!m || x.mode===m) &&
+    (!q || x.map.toLowerCase().includes(q) || x.id.toLowerCase().includes(q)));
+  const by = { elo:(a,b)=>(b.topElo||0)-(a.topElo||0), humans:(a,b)=>b.humans-a.humans,
+               map:(a,b)=>a.map.localeCompare(b.map), len:(a,b)=>b.lastTick-a.lastTick };
+  return r.sort(by[s]);
+}
+function renderList(){
+  const r = filtered();
+  $("count").textContent = `${r.length} von ${CATALOG.length} Partien`;
+  $("glist").innerHTML = r.map(x => `
+    <button class="gitem" data-id="${x.id}" aria-current="${current&&current.id===x.id}">
+      <span class="m">${esc(x.map)}</span>
+      <span class="d">
+        <span>${x.mode==="Team"?"Team":"FFA"}</span>
+        <span>${x.humans} Menschen</span>
+        <span>${mmss(x.lastTick)}</span>
+        ${x.topElo?`<span class="elo">Elo ${x.topElo}</span>`:""}
+      </span>
+    </button>`).join("");
+}
+["q","fmode","fsort"].forEach(id => $(id).addEventListener("input", renderList));
+$("glist").addEventListener("click", e => {
+  const b = e.target.closest(".gitem"); if(!b) return;
+  load(CATALOG.find(x=>x.id===b.dataset.id));
+});
+
+// ================= Wiedergabe =================
+const cv=$("cv"), ctx=cv.getContext("2d"), tip=$("tip"), veil=$("veil");
+let D=null, GW=0, GH=0, Nc=0, land=null, img=null, ownBuf=null, P=null;
+let idx=0, playing=false, speed=1, acc=0, last=0, sel=null;
+
+async function load(entry){
+  if(!entry) return;
+  pause(); current = entry; location.hash = entry.id;
+  renderList();
+  veil.hidden = false; veil.textContent = `${entry.map} wird geladen … ${entry.mb} MB`;
+  $("play").disabled = $("scrub").disabled = true;
+  try {
+    D = await (await fetch(`data/${entry.id}.json`)).json();
+  } catch(err){ veil.textContent = "Konnte die Partie nicht laden."; return; }
+
+  [GW,GH] = D.dims; Nc = GW*GH;
+  cv.width=GW; cv.height=GH; cv.style.aspectRatio = `${GW} / ${GH}`;
+  img = ctx.createImageData(GW,GH);
+  ownBuf = new Uint16Array(Nc);
+  land = unrle(D.land, new Uint8Array(Nc));
+
+  // Menschen bekommen ueber den goldenen Winkel maximal getrennte Farbtoene,
+  // Nationen bleiben gedaempft -- so liest man sofort, wo die Menschen stehen.
+  P = new Map(); let hi = 0;
+  for(const p of D.players){
+    const col = p.human ? `hsl(${((hi++*137.508)%360).toFixed(1)} 60% 52%)`
+                        : `hsl(${(p.id*47)%50+22} 10% 57%)`;
+    P.set(p.id, {...p, col});
+  }
+  sel = null; idx = 0;
+  $("scrub").max = D.frames.length-1;
+  $("play").disabled = $("scrub").disabled = false;
+  veil.hidden = true;
+  $("now").innerHTML = `<b>${esc(D.map)}</b> · ${esc(D.mode)} · ${D.mapDims[0]}×${D.mapDims[1]} Kacheln · ${esc(D.gameID)}`;
+  setIdx(0);
+}
+
+function draw(){
+  const f = D.frames[idx];
+  unrle(f.o, ownBuf);
+  const water = rgb(cssVar("--water")), voidc = rgb(cssVar("--void")), d = img.data;
+  for(let i=0;i<Nc;i++){
+    const o=i*4; let c;
+    if(!land[i]) c = water;
+    else {
+      const id = ownBuf[i];
+      if(id===0) c = voidc;
+      else {
+        const pl = P.get(id); c = pl ? rgb(pl.col) : voidc;
+        if(sel!==null && id!==sel){                 // Auswahl: Rest entsaettigen
+          const g = (c[0]*.299 + c[1]*.587 + c[2]*.114)|0;
+          c = [(c[0]+g*3)>>2, (c[1]+g*3)>>2, (c[2]+g*3)>>2];
+        }
+      }
+    }
+    d[o]=c[0]; d[o+1]=c[1]; d[o+2]=c[2]; d[o+3]=255;
+  }
+  ctx.putImageData(img,0,0);
+  side(f);
+}
+
+function side(f){
+  const rows = f.p.slice().sort((a,b)=>b[3]-a[3]);
+  const top = rows.slice(0,16), max = top.length ? top[0][3] : 1;
+  const humans = rows.filter(r => P.get(r[0])?.human).length;
+  const gone = D.events.filter(e=>e.t<=f.t).length;
+
+  $("strip").innerHTML =
+    `<div><div class="n">${fmt(rows.length)}</div><div class="l">im Spiel</div></div>`+
+    `<div><div class="n">${fmt(humans)}</div><div class="l">davon Menschen</div></div>`+
+    `<div><div class="n">${fmt(gone)}</div><div class="l">ausgeschieden</div></div>`+
+    `<div><div class="n">${fmt(rows.reduce((s,r)=>s+r[1],0))}</div><div class="l">Truppen gesamt</div></div>`;
+
+  $("lb").innerHTML = top.map(r=>{
+    const p = P.get(r[0]) || {name:"?",col:"#888",clan:null};
+    return `<div class="row ${sel===r[0]?"sel":""}" data-id="${r[0]}" title="${esc(p.name)}">
+      <span class="sw" style="background:${p.col}"></span>
+      <span class="who"><span class="nm">${esc(p.name)}</span>${p.clan?`<span class="clan">${esc(p.clan)}</span>`:""}</span>
+      <span class="val">${fmt(r[3])}</span>
+      <span class="bar" style="width:${Math.max(2,r[3]/max*100)}%;background:${p.col}"></span>
+    </div>`;}).join("");
+
+  const past = D.events.filter(e=>e.t<=f.t).slice(-50).reverse();
+  $("feed").innerHTML = past.length
+    ? past.map(e=>`<div class="ev ${e.human?"human":""}"><time>${mmss(e.t)}</time><span class="n">${esc(e.n)}</span></div>`).join("")
+    : `<div class="ev"><time>--:--</time><span class="n">noch niemand</span></div>`;
+}
+
+$("lb").addEventListener("click", e => {
+  const r = e.target.closest(".row"); if(!r) return;
+  const id = Number(r.dataset.id); sel = sel===id ? null : id; draw();
+});
+
+function setIdx(i){
+  idx = Math.max(0, Math.min(D.frames.length-1, i));
+  $("scrub").value = idx;
+  $("clock").innerHTML = `<b>${mmss(D.frames[idx].t)}</b> / ${mmss(D.frames.at(-1).t)} · ${idx+1}/${D.frames.length}`;
+  draw();
+}
+$("scrub").addEventListener("input", () => { pause(); setIdx(+$("scrub").value); });
+
+function frame(ts){
+  if(!playing) return;
+  if(!last) last = ts;
+  acc += (ts-last)/1000; last = ts;
+  const step = 1/(6*speed);
+  while(acc >= step){ acc -= step;
+    if(idx >= D.frames.length-1){ pause(); break; } setIdx(idx+1); }
+  requestAnimationFrame(frame);
+}
+function play(){ if(!D) return;
+  if(idx >= D.frames.length-1) setIdx(0);
+  playing = true; last = 0; acc = 0; $("play").textContent = "Pause"; requestAnimationFrame(frame); }
+function pause(){ playing = false; $("play").textContent = "Abspielen"; }
+$("play").addEventListener("click", () => playing ? pause() : play());
+$("speeds").addEventListener("click", e => {
+  const b = e.target.closest("button"); if(!b) return;
+  speed = +b.dataset.s;
+  [...e.currentTarget.children].forEach(x => x.setAttribute("aria-pressed", x===b));
+});
+addEventListener("keydown", e => {
+  if(!D) return;
+  if(e.target.tagName === "INPUT" && e.target.type === "search") return;
+  if(e.key === " "){ e.preventDefault(); playing ? pause() : play(); }
+  if(e.key === "ArrowRight"){ pause(); setIdx(idx+1); }
+  if(e.key === "ArrowLeft"){ pause(); setIdx(idx-1); }
+});
+
+// ---------- Zeiger ----------
+cv.addEventListener("mousemove", e => {
+  if(!D) return;
+  const r = cv.getBoundingClientRect();
+  const x = Math.floor((e.clientX-r.left)/r.width*GW), y = Math.floor((e.clientY-r.top)/r.height*GH);
+  const i = y*GW+x;
+  if(i<0 || i>=Nc || !land[i] || !ownBuf[i]){ tip.classList.remove("on"); return; }
+  const p = P.get(ownBuf[i]); if(!p){ tip.classList.remove("on"); return; }
+  const st = D.frames[idx].p.find(q => q[0]===ownBuf[i]);
+  tip.textContent = p.name + (st ? ` · ${fmt(st[3])} Felder · ${fmt(st[1])} Truppen` : " · ausgeschieden");
+  tip.style.left = (e.clientX-r.left+14)+"px";
+  tip.style.top = (e.clientY-r.top-30)+"px";
+  tip.classList.add("on");
+});
+cv.addEventListener("mouseleave", () => tip.classList.remove("on"));
+cv.addEventListener("click", e => {
+  if(!D) return;
+  const r = cv.getBoundingClientRect();
+  const x = Math.floor((e.clientX-r.left)/r.width*GW), y = Math.floor((e.clientY-r.top)/r.height*GH);
+  const o = ownBuf[y*GW+x]; if(o){ sel = sel===o ? null : o; draw(); }
+});
+})();
+</script>
+</body>
+</html>
