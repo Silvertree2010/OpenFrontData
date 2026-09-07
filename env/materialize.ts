@@ -34,11 +34,8 @@ import { ObsEncoder, NUM_CHANNELS } from "./obs";
 const ENGINE = path.join(path.dirname(fileURLToPath(import.meta.url)), "../vendor/openfront");
 const GW = 180, GH = 90, MAPLEN = NUM_CHANNELS * GW * GH;
 
-async function main() {
-  const [file, outdir] = process.argv.slice(2);
-  if (!file || !outdir) { console.error("Aufruf: materialize.ts <record.json> <outdir>"); process.exit(2); }
+async function run(file: string, outdir: string) {
   console.debug = () => {};
-  fs.mkdirSync(outdir, { recursive: true });
 
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
   const parsed = GameRecordSchema.safeParse(raw);
@@ -146,5 +143,27 @@ async function main() {
   const mb = fs.statSync(mapsPath).size / 1e6;
   console.log(`${info.gameID} ${info.config.gameMap}: ${samples} Samples, maps ${mb.toFixed(1)} MB ` +
     `(${(mb * 1000 / Math.max(samples, 1)).toFixed(1)} KB/Sample), ${((performance.now() - t0) / 1000).toFixed(0)}s`);
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  let files: string[], outdir: string;
+  if (args[0] === "--list") {
+    files = fs.readFileSync(args[1], "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
+    outdir = args[2];
+  } else {
+    files = [args[0]]; outdir = args[1];
+  }
+  if (!files.length || !outdir) { console.error("Aufruf: materialize.ts <record.json | --list liste.txt> <outdir>"); process.exit(2); }
+  fs.mkdirSync(outdir, { recursive: true });
+
+  let done = 0, skipped = 0, failed = 0;
+  for (const f of files) {
+    const gid = path.basename(f).replace(/\.json$/, "");
+    if (fs.existsSync(path.join(outdir, `${gid}.meta.zst`))) { skipped++; continue; }  // resume-fest
+    try { await run(f, outdir); done++; }
+    catch (e: any) { console.error(`FEHLER ${gid}: ${e?.message ?? e}`); failed++; }
+  }
+  if (files.length > 1) console.log(`[fertig] ${done} materialisiert, ${skipped} übersprungen, ${failed} Fehler`);
 }
 main();
