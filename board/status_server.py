@@ -491,6 +491,9 @@ def make_handler(state, web_dir):
                 return
 
             full = os.path.join(web_dir, norm)
+            if os.path.isdir(full):        # Verzeichnis -> dessen index.html (z.B. /viz/)
+                norm = os.path.join(norm, "index.html")
+                full = os.path.join(web_dir, norm)
             try:
                 real_full = os.path.realpath(full)
             except OSError:
