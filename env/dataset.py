@@ -77,9 +77,11 @@ def load_game(shard_dir, gid, raw=False, records_dirs=None):
     cfg_vec = config_vec_for(gid, records_dirs)   # einmal je Spiel
     lines = zstd.decompress(open(meta_path, "rb").read()).decode().split("\n")
     with open(maps_path, "rb") as mf:
+        gelesen = 0
         for line in lines:
             if not line:
                 continue
+            gelesen += 1
             s = json.loads(line)
             # --- Karte lesen (laengen-praefigierter zstd-Block) ---
             ln = struct.unpack("<I", mf.read(4))[0]
@@ -118,6 +120,11 @@ def load_game(shard_dir, gid, raw=False, records_dirs=None):
             else:
                 out["map"] = dequantize(u8)
             yield out
+        # Nach der letzten Metazeile darf kein Kartenblock uebrig sein. Ist doch
+        # einer da, sind meta und maps verschoben — dann saehe jedes Sample gueltig
+        # aus, gehoerte aber zur falschen Karte (siehe env/check_shards.py).
+        if mf.read(1):
+            raise ValueError(f"{gid}: mehr Kartenblöcke als Metazeilen ({gelesen} gelesen)")
 
 
 if __name__ == "__main__":
