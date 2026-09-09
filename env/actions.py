@@ -220,9 +220,12 @@ class Context:
     def own_index(self, unit_id: int, attacks=False) -> int:
         lst = self.own_attack_ids if attacks else self.own_unit_ids
         try:
-            return lst.index(unit_id)
+            i = lst.index(unit_id)
         except ValueError:
             return OWN_UNRESOLVED
+        # Kopf spannt nur [0, MAX_OWN_REF): Einheiten dahinter sieht das Netz nicht,
+        # also unauflösbar (nicht supervidieren) statt Label ausserhalb der Klassen.
+        return i if i < MAX_OWN_REF else OWN_UNRESOLVED
 
     def own_id(self, idx: int, attacks=False):
         lst = self.own_attack_ids if attacks else self.own_unit_ids

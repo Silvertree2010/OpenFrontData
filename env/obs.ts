@@ -101,7 +101,7 @@ export class ObsEncoder {
   private readonly samCoverG: Uint16Array;    // Besitzer eines abdeckenden SAM je Zelle
 
   private readonly counts: Int32Array;
-  private readonly cellTiles: Int32Array;
+  private readonly sampCount: Int32Array;    // je Zelle: wie viele Kacheln gesampelt (fuer Bruchteile)
   private readonly stride: number;
   private terrain: Uint8Array | null = null;
   private nbuf: TileRef[] = new Array(8).fill(0);
@@ -120,7 +120,7 @@ export class ObsEncoder {
     this.mobileG = MOBILE_TYPES.map(() => new Uint16Array(this.n));
     this.samCoverG = new Uint16Array(this.n);
     this.counts = new Int32Array(this.n * this.stride);
-    this.cellTiles = new Int32Array(this.n);
+    this.sampCount = new Int32Array(this.n);
   }
 
   /** Gelaende einmal pro Partie einlesen -- es aendert sich nie. */
@@ -128,11 +128,6 @@ export class ObsEncoder {
     const W = game.width(), H = game.height();
     this.terrain = new Uint8Array(W * H);
     for (let r = 0; r < W * H; r++) this.terrain[r] = game.map().terrainByte(r);
-    this.cellTiles.fill(0);
-    for (let y = 0; y < H; y++) {
-      const gy = ((y * this.gh) / H) | 0;
-      for (let x = 0; x < W; x++) this.cellTiles[gy * this.gw + (((x * this.gw) / W) | 0)]++;
-    }
   }
 
   /** Der teure Durchlauf. Einmal pro Tick, gilt fuer alle Spieler. */
@@ -146,17 +141,26 @@ export class ObsEncoder {
 
     this.landG.fill(0); this.magG.fill(0);
     this.falloutG.fill(0); this.defenseG.fill(0);
-    this.counts.fill(0);
+    this.counts.fill(0); this.sampCount.fill(0);
 
-    for (let y = 0; y < H; y++) {
+    // Sampling statt Vollscan: pro 180×90-Zelle reichen ~4×4 Kacheln fuer Zell-
+    // Aggregate (Landanteil, Mittel-Magnitude, Mehrheitsbesitzer). Schrittweite so,
+    // dass grosse Karten stark ausgeduennt werden, kleine (Zelle ≤ ~4 Kacheln) voll
+    // gescannt bleiben. Gebaeude/SAM/Mobile werden weiter EXAKT eingestempelt.
+    const full = process.env.SCAN_FULL === "1";   // Vollscan-Fallback (A/B / Debug)
+    const sx = full ? 1 : Math.max(1, (W / gw / 4) | 0);
+    const sy = full ? 1 : Math.max(1, (H / gh / 4) | 0);
+
+    for (let y = 0; y < H; y += sy) {
       const gy = ((y * gh) / H) | 0, row = y * W;
-      for (let x = 0; x < W; x++) {
+      for (let x = 0; x < W; x += sx) {
+        const gi = gy * gw + (((x * gw) / W) | 0);
+        this.sampCount[gi]++;
         const ref = row + x;
         const t = terrain[ref];
         if ((t & LAND_BIT) === 0) continue;
         const mag = t & MAG_MASK;
         if (mag === IMPASSABLE) continue;
-        const gi = gy * gw + (((x * gw) / W) | 0);
         this.landG[gi]++;
         this.magG[gi] += mag;
         const s = state[ref];
@@ -168,7 +172,7 @@ export class ObsEncoder {
     }
 
     for (let gi = 0; gi < n; gi++) {
-      const tiles = this.cellTiles[gi] || 1;
+      const tiles = this.sampCount[gi] || 1;   // gesampelte Kacheln in dieser Zelle
       const landN = this.landG[gi] || 1;
       this.magG[gi] /= landN * IMPASSABLE;
       this.falloutG[gi] /= landN;

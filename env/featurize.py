@@ -68,6 +68,66 @@ OPP_FEATURES = [
 ]
 OPP_DIM = len(OPP_FEATURES)
 
+# ── CONFIG/Modifier je SPIEL: das Regelwerk, in dem gespielt wird (aus info.config).
+#    Ohne das sieht der Agent im gemischten Pool widerspruechliche Daten (Angriff geht
+#    vs. blockt, Nukes da vs. disabled) ohne Kontext. Fehlende Keys -> neutraler Default.
+_DIFF = {"easy": 0.0, "medium": 0.33, "hard": 0.66, "impossible": 1.0}
+_SIZE = {"small": 0.0, "normal": 0.5, "large": 1.0, "huge": 1.0}
+_TEAMNAME = {"duos": 2, "trios": 3, "quads": 4}   # benannte Team-Groessen
+
+def _has_unit(units, name):
+    return 1.0 if any(name.lower() in str(u).lower() for u in (units or [])) else 0.0
+
+def _num(x, default=0.0):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return default
+
+def _team_count(c):
+    # playerTeams ist entweder eine Zahl, ein Name ("Duos") oder ein Modus
+    # ("Humans Vs Nations") -> letzterer zaehlt nicht als Team-Zahl.
+    pt = c.get("playerTeams", 0)
+    if isinstance(pt, bool):
+        return 0.0
+    if isinstance(pt, (int, float)):
+        return float(pt)
+    s = str(pt).strip().lower()
+    return float(_TEAMNAME.get(s, _num(s, 0.0)))
+
+CONFIG_FEATURES = [
+    ("is_team",        lambda c: 1.0 if str(c.get("gameMode", "")).lower().startswith("team") else 0.0),
+    ("team_count",     lambda c: _clip01(_team_count(c) / 8)),
+    ("humans_vs_nations", lambda c: 1.0 if "human" in str(c.get("playerTeams", "")).lower() else 0.0),
+    ("map_size",       lambda c: _SIZE.get(str(c.get("gameMapSize", "normal")).lower(), 0.5)),
+    ("difficulty",     lambda c: _DIFF.get(str(c.get("difficulty", "medium")).lower(), 0.33)),
+    ("bots_frac",      lambda c: _clip01(_num(c.get("bots", 0)) / 500)),
+    ("donate_gold",    lambda c: float(bool(c.get("donateGold", False)))),
+    ("donate_troops",  lambda c: float(bool(c.get("donateTroops", False)))),
+    ("infinite_gold",  lambda c: float(bool(c.get("infiniteGold", False)))),
+    ("infinite_troops",lambda c: float(bool(c.get("infiniteTroops", False)))),
+    ("instant_build",  lambda c: float(bool(c.get("instantBuild", False)))),
+    ("random_spawn",   lambda c: float(bool(c.get("randomSpawn", False)))),
+    ("nukes_disabled", lambda c: max(_has_unit(c.get("disabledUnits"), "MIRV"),
+                                     _has_unit(c.get("disabledUnits"), "Atom"),
+                                     _has_unit(c.get("disabledUnits"), "Hydrogen"),
+                                     _has_unit(c.get("disabledUnits"), "Nuke"))),
+    ("sam_disabled",   lambda c: _has_unit(c.get("disabledUnits"), "SAM")),
+    ("warship_disabled",lambda c: _has_unit(c.get("disabledUnits"), "Warship")),
+    ("port_disabled",  lambda c: _has_unit(c.get("disabledUnits"), "Port")),
+    ("silo_disabled",  lambda c: _has_unit(c.get("disabledUnits"), "Silo")),
+    ("anon_names",     lambda c: float(bool(c.get("anonymizeNames", False)))),  # -> Reputation unbrauchbar
+    ("doomsday",       lambda c: float(bool((c.get("doomsdayClock") or {}).get("enabled", False)))),
+    ("overtime",       lambda c: float(bool((c.get("overtime") or {}).get("enabled", False)))),
+]
+CONFIG_DIM = len(CONFIG_FEATURES)
+
+
+def featurize_config(config: dict):
+    """info.config-Dict -> fester Modifier-Vektor (CONFIG_DIM)."""
+    c = config or {}
+    return [f(c) for _, f in CONFIG_FEATURES]
+
 
 def featurize_own(own: dict):
     return [f(own) for _, f in OWN_FEATURES]
