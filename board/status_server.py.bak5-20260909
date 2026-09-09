@@ -153,20 +153,6 @@ class MetricsState:
         self._need_reset = True
         self._mid_ingest_reset = True
 
-    def _adopt_without_start_locked(self, rec):
-        """Baut aus der ersten Zeile eines Laufs OHNE eigenes start-Ereignis
-        ein minimales meta, damit state/runtime/age nicht blind bleiben.
-        "t" ist hier der Zeitpunkt dieser Zeile, nicht der echte Laufstart --
-        runtime/age werden also nur geschaetzt. meta_partial markiert das im
-        JSON, damit die Oberflaeche es nicht als exakte Zahl anzeigt."""
-        self.meta = {
-            "run": rec.get("run"),
-            "t": rec.get("t"),
-            "label": rec.get("label"),
-            "device": rec.get("device"),
-            "meta_partial": True,
-        }
-
     def _ingest_locked(self, chunk):
         data = self._buf + chunk
         lines = data.split(b"\n")
@@ -190,23 +176,18 @@ class MetricsState:
         run = rec.get("run")
         kind = rec.get("kind")
         if run is not None and self.run is not None and run != self.run:
-            if run < self.run:
-                # Aeltere Laufkennung taucht auf, nachdem wir bereits einen
-                # neueren Lauf gesehen haben -- ein verwaister Rest (z.B.
-                # Ueberbleibsel eines ueberlappenden/erneuerten Sync), kein
-                # echter Laufwechsel. Nur diesen einzelnen Datensatz
-                # zurueckweisen, der gueltige Zustand bleibt stehen.
+            if kind == "start":
+                # Legitimer Laufwechsel: sauber zuruecksetzen, das start-
+                # Ereignis baut den Zustand im selben Aufruf wieder auf.
+                self._reset_state_locked()
+            else:
+                # Datensatz eines fremden Laufs OHNE eigenes start-Ereignis in
+                # diesem Fenster -- vermutlich Rest eines angerissenen
+                # Uebergangs (z.B. durch einen ueberlappenden/erneuerten
+                # Sync). Nicht den gueltigen Zustand des aktuellen Laufs
+                # verwerfen, nur den verwaisten Datensatz zurueckweisen.
                 self._bad_lines += 1
                 return
-            # Neuere Laufkennung: IMMER ein legitimer Laufwechsel, auch ohne
-            # eigenes start-Ereignis in diesem Fenster -- ein fortgesetztes
-            # Training (nach z.B. einem Stromausfall) schreibt kein start
-            # mehr, das ist der Normalfall, kein Fehler. Lauf-IDs sind
-            # Zeitstempel (YYYYmmdd-HHMMSS), Stringvergleich = chronologisch,
-            # darum gewinnt die neueste Laufkennung in der Datei immer.
-            self._reset_state_locked()
-            if kind != "start":
-                self._adopt_without_start_locked(rec)
         if run is not None:
             self.run = run
 
@@ -755,8 +736,7 @@ def run_self_tests():
         check("6 kaputte Zeile uebersprungen, Rest kommt an",
               state2._bad_lines == before_bad + 1 and state2.last.get("step") == 60)
 
-        # --- 12: rsync-artiger Austausch (neue Inode) darf meta nicht verlieren,
-        #         solange die fremden Zeilen eine AELTERE Laufkennung tragen ---
+        # --- 12: rsync-artiger Austausch (neue Inode) darf meta nicht verlieren ---
         rsync_dir = os.path.join(tmp, "rsync_root")
         rsync_train = os.path.join(rsync_dir, "train")
         os.makedirs(rsync_train, exist_ok=True)
@@ -780,11 +760,12 @@ def run_self_tests():
         ino_before = os.stat(rsync_metrics).st_ino
 
         # rsync-artiger Ersatz: temp-Datei schreiben, dann atomar umbenennen
-        # (neue Inode). Enthaelt dieselben Zeilen plus weitere mit einer
-        # AELTEREN Laufkennung als run_a -- ein verwaister Rest (z.B. Reste
-        # eines ueberlappenden/erneuerten rsync-Transfers), kein echter neuer
-        # Lauf. Der muss weiterhin verworfen werden.
-        run_b = "20260909-000001"
+        # (neue Inode). Enthaelt dieselben Zeilen plus weitere -- die neuen
+        # Zeilen gehoeren zu einem angerissenen Lauf-Uebergang (Steps eines
+        # neuen Laufs, dessen eigenes start-Ereignis bei diesem Austausch
+        # verlorenging), wie es ein ueberlappender/erneuerter rsync-Transfer
+        # verursachen kann.
+        run_b = "20260909-999999"
         lines_b = list(lines_a)
         for i in range(3, 6):
             lines_b.append(json.dumps({
@@ -808,46 +789,6 @@ def run_self_tests():
             and st12["meta"]["run"] == run_a
             and st12["last"]["run"] == run_a
             and st12["state"] == "laeuft",
-        )
-
-        # --- 13: fortgesetzter Lauf OHNE eigenes start-Ereignis wird trotzdem
-        #         uebernommen (z.B. Training nach Stromausfall fortgesetzt,
-        #         oder dessen start-Zeile ist durch einen abgerissenen
-        #         Schreibvorgang unlesbar geworden) ---
-        resume_dir = os.path.join(tmp, "resume_root")
-        resume_train = os.path.join(resume_dir, "train")
-        os.makedirs(resume_train, exist_ok=True)
-        resume_metrics = os.path.join(resume_train, "metrics.jsonl")
-        run_old = "20260909-103929"
-        run_new = "20260909-152706"       # neuer, aber OHNE eigenes start
-        now_r = time.time()
-        with open(resume_metrics, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"run": run_old, "t": now_r - 3600, "kind": "start",
-                                 "core_heads": ["atype"]}) + "\n")
-            f.write(json.dumps({"run": run_old, "t": now_r - 3600, "kind": "step",
-                                 "step": 98700, "loss": 1.0, "acc": 0.5, "sps": 100.0,
-                                 "gnorm": 1.0, "vmse": 0.1, "winfrac": 0.4, "lr": 0.001,
-                                 "hen": {"atype": 0.5}, "htop": {"atype": 0.5},
-                                 "adv": {"p50": 0.9, "p90": 1.5}}) + "\n")
-            for i in range(3):
-                f.write(json.dumps({
-                    "run": run_new, "t": now_r + i, "kind": "step",
-                    "step": 111500 + i, "loss": 0.5, "acc": 0.7, "sps": 120.0,
-                    "gnorm": 0.8, "vmse": 0.05, "winfrac": 0.5, "lr": 0.001,
-                    "label": "pool_shards", "device": "cuda",
-                    "hen": {"atype": 0.5}, "htop": {"atype": 0.5},
-                    "adv": {"p50": 0.9, "p90": 1.5}}) + "\n")
-        resume_state = MetricsState(resume_dir)
-        st13 = resume_state.status()
-        check(
-            "13 Lauf ohne start-Ereignis wird uebernommen (neueste Laufkennung gewinnt)",
-            st13["meta"] is not None
-            and st13["meta"]["run"] == run_new
-            and st13["meta"].get("meta_partial") is True
-            and st13["last"] is not None
-            and st13["last"]["run"] == run_new
-            and st13["last"]["step"] == 111502
-            and st13["state"] == "laeuft",
         )
 
         # --- 5: Rotation ---

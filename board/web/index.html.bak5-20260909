@@ -418,7 +418,7 @@ function renderAll(status) {
   $("statetxt").textContent = "Zustand: " + ({laeuft: "läuft", pause: "pausiert", beendet: "beendet"}[state] || state);
   $("runlabel").textContent = "Lauf: " + ((meta && meta.label) || (meta && meta.run) || "—");
   $("devicetxt").textContent = "Gerät: " + ((meta && meta.device) || "—");
-  $("runtimetxt").textContent = "Laufzeit: " + ((meta && meta.meta_partial) ? "~" : "") + dur(status.runtime);
+  $("runtimetxt").textContent = "Laufzeit: " + dur(status.runtime);
 
   // Fortschritt
   const gEpoch = last.games_epoch || 0, gDone = last.games_done || 0;

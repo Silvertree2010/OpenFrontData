@@ -90,32 +90,12 @@ class MetricsLog:
         self._maybe_push(force=True)
 
     def _write(self, rec):
+        rec = _round(rec)
         try:
-            line = json.dumps(_round(rec)).encode("utf-8") + b"\n"
-        except Exception as e:                # z.B. nicht serialisierbarer Wert
-            print(f"[warn] Metrikzeile verworfen (kind={rec.get('kind', '?')}): "
-                  f"{e}", flush=True)
-            return
-        try:
-            with open(self.path, "a+b") as f:
-                f.seek(0, os.SEEK_END)
-                if f.tell() > 0:
-                    f.seek(-1, os.SEEK_END)
-                    if f.read(1) != b"\n":
-                        # Die vorherige Zeile wurde offenbar mitten im
-                        # Schreiben abgerissen (z.B. Stromausfall) und hat
-                        # kein abschliessendes \n bekommen. Erst selbst eine
-                        # Zeile abschliessen, sonst verschmilzt unser neuer
-                        # Datensatz mit dem Bruchstueck zu einer einzigen,
-                        # nicht mehr parsbaren Zeile -- und faellt fuer jeden
-                        # Zeilen-Parser (z.B. status_server.py) unter den
-                        # Tisch, auch wenn er selbst gueltiges JSON ist.
-                        f.write(b"\n")
-                    f.seek(0, os.SEEK_END)
-                f.write(line)
-        except OSError as e:
-            print(f"[warn] Metrikzeile nicht geschrieben (kind={rec.get('kind', '?')}): "
-                  f"{e}", flush=True)
+            with open(self.path, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+        except OSError:
+            pass
 
     def _maybe_push(self, force=False):
         if not self.push:
