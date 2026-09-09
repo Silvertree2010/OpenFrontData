@@ -3,7 +3,7 @@
  *
  * Replayt ein Spiel und schreibt pro Entscheidungs-Sample (handelnder Mensch bei
  * seinem Zug):
- *   <id>.meta.zst  zstd(JSONL): je Zeile { ctx (fuer Label-encode), own, opps, intent }
+ *   <id>.meta.zst  zstd(JSONL): je Zeile { ctx (fuer Label-encode), own, opps, intent, w }
  *   <id>.maps      Folge von [uint32 LE Laenge][zstd(Karten-uint8-Block)], 1:1 zu meta
  *
  * Die Karte (18×90×180) wird float→uint8 quantisiert und je Block einzeln zstd-t
@@ -12,7 +12,13 @@
  * truth: featurize.py + actions.encode), damit man ohne Neu-Extraktion nachjustieren
  * kann. Die Beobachtung ist der Zustand VOR dem Zug (was der Spieler sah).
  *
+ * Mit NOOP_EVERY=<K> kommen Nichtstun-Samples dazu: je K-tem intentlosen Tick und
+ * Spieler ein Sample mit intent {"type":"no_op"} und w=K (Kehrwert der Abtast-
+ * wahrscheinlichkeit). NOOP_ONLY=1 schreibt NUR diese (Zusatzlauf zu einem
+ * bestehenden Pool), NOOP_ALIGN=1 tastet alle Spieler im selben Tick ab.
+ *
  *   npx tsx env/materialize.ts <record.json> <outdir>
+ *   NOOP_EVERY=200 npx tsx env/materialize.ts --list liste.txt <outdir>
  */
 import fs from "fs";
 import path from "path";
@@ -33,6 +39,11 @@ import { ObsEncoder, NUM_CHANNELS } from "./obs";
 
 const ENGINE = path.join(path.dirname(fileURLToPath(import.meta.url)), "../vendor/openfront");
 const GW = 180, GH = 90, MAPLEN = NUM_CHANNELS * GW * GH;
+
+// Dateiname-Zusatz: ein Nur-Nichtstun-Lauf schreibt <gid>.noop.* und kann so
+// NEBEN einem bestehenden Pool im selben Ordner liegen, ohne ihn zu ueberschreiben
+// (dataset.py/list_games behandeln "<gid>.noop" wie ein eigenes Spiel).
+const SUFFIX = process.env.SUFFIX ?? (process.env.NOOP_ONLY === "1" ? ".noop" : "");
 
 async function run(file: string, outdir: string) {
   console.debug = () => {};
@@ -72,27 +83,105 @@ async function run(file: string, outdir: string) {
   const W = game.width(), H = game.height();
   const humanClient = new Set(gameStart.players.map((p) => p.clientID));
 
-  const mapsPath = path.join(outdir, `${info.gameID}.maps`);
+  const mapsPath = path.join(outdir, `${info.gameID}${SUFFIX}.maps`);
   const mapsFd = fs.openSync(mapsPath, "w");
   const metaLines: string[] = [];
   const obsBuf = new Float32Array(MAPLEN);
   const u8 = new Uint8Array(MAPLEN);
   const lenBuf = Buffer.allocUnsafe(4);
 
-  let samples = 0, scannedTick = -1, thinned = 0;
+  let samples = 0, scannedTick = -1, thinned = 0, noops = 0, noopChances = 0;
   const t0 = performance.now();
   // Ausduennen: pro Spieler max 1 Angriff je THIN Ticks (Rest immer behalten).
   const THIN = Number(process.env.THIN ?? 30);
   const lastAttack = new Map<string, number>();
 
+  // ── Nichtstun (A.NO_OP) ────────────────────────────────────────────────────
+  // Bisher entstand ein Sample NUR, wenn ein Mensch tatsaechlich klickte. Das
+  // Netz wird aber jeden Tick gefragt und hat kein einziges Beispiel fuer
+  // "jetzt nichts tun" gesehen (gemessen: 7 von 72320 Labels). Deshalb hier
+  // zusaetzlich Samples aus intentlosen Ticks — aber nicht aus JEDEM: Menschen
+  // handeln im Median alle 73 Ticks, ein Vollabtasten wuerde alles andere im
+  // Verhaeltnis ~1:70 ertraenken. Wir nehmen jeden NOOP_EVERY-ten intentlosen
+  // Tick je Spieler und schreiben die Kehrwahrscheinlichkeit als Gewicht `w`
+  // in die meta-Zeile; damit kann das Training den echten Prior herstellen,
+  // ohne dass wir nochmal materialisieren muessen.
+  const NOOP_EVERY = Number(process.env.NOOP_EVERY ?? 0);   // 0 = aus (Verhalten wie bisher)
+  const NOOP_ONLY = process.env.NOOP_ONLY === "1";          // nur Nichtstun (Zusatzlauf zu altem Pool)
+  const NOOP_ALIGN = process.env.NOOP_ALIGN === "1";        // alle Spieler im selben Tick abtasten
+  const NOOP_INTENT = { type: "no_op" };   // actions.encode: unbekannter Typ → A.NO_OP, decode gibt ihn zurueck
+  // Phase je Spieler, damit nicht alle im selben Tick abgetastet werden.
+  const phases = new Map<string, number>();
+  const phaseOf = (cid: string) => {
+    let ph = phases.get(cid);
+    if (ph === undefined) { ph = NOOP_ALIGN ? 0 : Math.abs(simpleHash(cid)) % NOOP_EVERY; phases.set(cid, ph); }
+    return ph;
+  };
+  // Weggeklinkte Spieler produzieren sonst endlos "Nichtstun", das keine
+  // Entscheidung ist. isDisconnected=false holt sie zurueck.
+  const disconnected = new Set<string>();
+
+  const ctxCache = new Map<string, any>();     // je Tick geleert
+  const mapCache = new Map<string, Buffer>();
+
+  // Ein Sample schreiben. HIER haengt jeder weitere Intent-Typ ein: mit dem
+  // rohen Intent aufrufen, alles andere (Kontext, Karte, meta-Zeile) ist geteilt.
+  const emit = (player: any, cid: string, turnNumber: number, intent: any, w: number) => {
+    let ctx = ctxCache.get(cid);
+    let zblock = mapCache.get(cid);
+    if (!ctx) {
+      if (scannedTick !== turnNumber) { enc.scanTick(game); scannedTick = turnNumber; }
+      const v = enc.encodeVec(game, player, 24);
+      const allies = new Set(player.allies().map((a: any) => a.smallID()));
+      enc.encodeMap(player, allies, obsBuf);
+      for (let k = 0; k < MAPLEN; k++) {
+        let x = obsBuf[k]; if (x < -1) x = -1; else if (x > 1) x = 1;
+        u8[k] = Math.round((x + 1) * 127.5);
+      }
+      zblock = zstdCompressSync(Buffer.from(u8.buffer, 0, MAPLEN));
+      // Gegner-Reihenfolge → PlayerIDs (Label-Ziele sind PlayerIDs); plus user/clan fuer Reputation
+      const oppIds = v.opponents.map((o) => {
+        const pl = game.playerBySmallID(o.id);
+        return pl.isPlayer() ? pl.id() : null;
+      });
+      const opps = v.opponents.map((o) => {
+        const pl = game.playerBySmallID(o.id);
+        return { ...o, user: pl.isPlayer() ? pl.name() : null, clan: pl.isPlayer() ? pl.clanTag() : null };
+      });
+      ctx = {
+        mapW: W, mapH: H, troops: player.troops(), gold: Number(player.gold()),
+        oppIds, ownUnitIds: player.units().map((u: any) => u.id()),
+        ownAttackIds: player.outgoingAttacks().map((a: any) => a.id()),
+        own: v.own, opps,
+      };
+      ctxCache.set(cid, ctx); mapCache.set(cid, zblock);
+    }
+    // meta-Zeile: alles fuer Label-encode (Python) + obs-Features
+    metaLines.push(JSON.stringify({ turn: turnNumber, clientID: cid,
+      mapW: ctx.mapW, mapH: ctx.mapH, troops: ctx.troops, gold: ctx.gold,
+      oppIds: ctx.oppIds, ownUnitIds: ctx.ownUnitIds, ownAttackIds: ctx.ownAttackIds,
+      own: ctx.own, opps: ctx.opps, intent, w, win: winners.has(cid) ? 1 : 0 }));
+    lenBuf.writeUInt32LE(zblock!.length, 0);
+    fs.writeSync(mapsFd, lenBuf); fs.writeSync(mapsFd, zblock!);
+    samples++;
+  };
+
   for (const turn of record.turns) {
     const intents = turn.intents ?? [];
+    for (const i of intents as any[]) {
+      if (i.type === "mark_disconnected" && i.clientID) {
+        if (i.isDisconnected === false) disconnected.delete(i.clientID);
+        else disconnected.add(i.clientID);
+      }
+    }
     const acting = intents.filter((i: any) => i.clientID && humanClient.has(i.clientID) && i.type !== "mark_disconnected");
-    if (acting.length > 0 && !game.inSpawnPhase()) {
-      // Kontext + Karte je handelndem Spieler EINMAL pro Tick (mehrere Intents teilen sie)
-      const ctxCache = new Map<string, any>();
-      const mapCache = new Map<string, Buffer>();
-      for (const intent of acting) {
+    if ((acting.length > 0 || NOOP_EVERY > 0) && !game.inSpawnPhase()) {
+      // Kontext + Karte je Spieler EINMAL pro Tick (mehrere Intents teilen sie)
+      ctxCache.clear(); mapCache.clear();
+      // Wer in diesem Tick geklickt hat — auch wenn wir den Klick ausduennen:
+      // das ist KEIN Nichtstun-Moment und darf nicht als solcher gelabelt werden.
+      const acted = new Set<string>((acting as any[]).map((i) => i.clientID));
+      if (!NOOP_ONLY) for (const intent of acting) {
         const cid = (intent as any).clientID;
         const player = game.players().find((p) => p.clientID() === cid);
         if (!player || !player.isAlive()) continue;
@@ -103,56 +192,35 @@ async function run(file: string, outdir: string) {
           if (la !== undefined && turn.turnNumber - la < THIN) { thinned++; continue; }
           lastAttack.set(cid, turn.turnNumber);
         }
-
-        let ctx = ctxCache.get(cid);
-        let zblock = mapCache.get(cid);
-        if (!ctx) {
-          if (scannedTick !== turn.turnNumber) { enc.scanTick(game); scannedTick = turn.turnNumber; }
-          const v = enc.encodeVec(game, player, 24);
-          const allies = new Set(player.allies().map((a) => a.smallID()));
-          enc.encodeMap(player, allies, obsBuf);
-          for (let k = 0; k < MAPLEN; k++) {
-            let x = obsBuf[k]; if (x < -1) x = -1; else if (x > 1) x = 1;
-            u8[k] = Math.round((x + 1) * 127.5);
-          }
-          zblock = zstdCompressSync(Buffer.from(u8.buffer, 0, MAPLEN));
-          // Gegner-Reihenfolge → PlayerIDs (Label-Ziele sind PlayerIDs); plus user/clan fuer Reputation
-          const oppIds = v.opponents.map((o) => {
-            const pl = game.playerBySmallID(o.id);
-            return pl.isPlayer() ? pl.id() : null;
-          });
-          const opps = v.opponents.map((o, idx) => {
-            const pl = game.playerBySmallID(o.id);
-            return { ...o, user: pl.isPlayer() ? pl.name() : null, clan: pl.isPlayer() ? pl.clanTag() : null };
-          });
-          ctx = {
-            mapW: W, mapH: H, troops: player.troops(), gold: Number(player.gold()),
-            oppIds, ownUnitIds: player.units().map((u) => u.id()),
-            ownAttackIds: player.outgoingAttacks().map((a) => a.id()),
-            own: v.own, opps,
-          };
-          ctxCache.set(cid, ctx); mapCache.set(cid, zblock);
-        }
-        // meta-Zeile: alles fuer Label-encode (Python) + obs-Features
-        metaLines.push(JSON.stringify({ turn: turn.turnNumber, clientID: cid,
-          mapW: ctx.mapW, mapH: ctx.mapH, troops: ctx.troops, gold: ctx.gold,
-          oppIds: ctx.oppIds, ownUnitIds: ctx.ownUnitIds, ownAttackIds: ctx.ownAttackIds,
-          own: ctx.own, opps: ctx.opps, intent, win: winners.has(cid) ? 1 : 0 }));
-        lenBuf.writeUInt32LE(zblock!.length, 0);
-        fs.writeSync(mapsFd, lenBuf); fs.writeSync(mapsFd, zblock!);
-        samples++;
+        emit(player, cid, turn.turnNumber, intent, 1);
+      }
+      if (NOOP_EVERY > 0) for (const player of game.players()) {
+        if (!player.isAlive()) continue;
+        const cid = player.clientID();
+        if (!cid || !humanClient.has(cid) || acted.has(cid) || disconnected.has(cid)) continue;
+        noopChances++;
+        if ((turn.turnNumber + phaseOf(cid)) % NOOP_EVERY !== 0) continue;
+        emit(player, cid, turn.turnNumber, NOOP_INTENT, NOOP_EVERY);
+        noops++;
       }
     }
     runner.addTurn(turn);
     runner.executeNextTick();
-    if (fatal) { console.error("Fehler:", fatal); fs.closeSync(mapsFd); process.exit(1); }
+    if (fatal) {
+      // EIN kaputtes Spiel darf NICHT den ganzen Chunk killen: werfen statt exit,
+      // partielle .maps aufraeumen; main() faengt es und macht mit dem naechsten weiter.
+      fs.closeSync(mapsFd);
+      try { fs.unlinkSync(mapsPath); } catch {}
+      throw new Error(`tick-Fehler ${info.gameID}: ${fatal}`);
+    }
   }
   fs.closeSync(mapsFd);
-  fs.writeFileSync(path.join(outdir, `${info.gameID}.meta.zst`), zstdCompressSync(Buffer.from(metaLines.join("\n"))));
+  fs.writeFileSync(path.join(outdir, `${info.gameID}${SUFFIX}.meta.zst`), zstdCompressSync(Buffer.from(metaLines.join("\n"))));
 
   const mb = fs.statSync(mapsPath).size / 1e6;
-  console.log(`${info.gameID} ${info.config.gameMap}: ${samples} Samples, maps ${mb.toFixed(1)} MB ` +
-    `(${(mb * 1000 / Math.max(samples, 1)).toFixed(1)} KB/Sample, ${thinned} ausgeduennt), ${((performance.now() - t0) / 1000).toFixed(0)}s`);
+  console.log(`${info.gameID} ${info.config.gameMap}: ${samples} Samples (${noops} no-op von ${noopChances} Gelegenheiten), ` +
+    `maps ${mb.toFixed(1)} MB (${(mb * 1000 / Math.max(samples, 1)).toFixed(1)} KB/Sample, ${thinned} ausgeduennt), ` +
+    `${((performance.now() - t0) / 1000).toFixed(0)}s`);
 }
 
 async function main() {
@@ -170,7 +238,7 @@ async function main() {
   let done = 0, skipped = 0, failed = 0;
   for (const f of files) {
     const gid = path.basename(f).replace(/\.json$/, "");
-    if (fs.existsSync(path.join(outdir, `${gid}.meta.zst`))) { skipped++; continue; }  // resume-fest
+    if (fs.existsSync(path.join(outdir, `${gid}${SUFFIX}.meta.zst`))) { skipped++; continue; }  // resume-fest
     try { await run(f, outdir); done++; }
     catch (e: any) { console.error(`FEHLER ${gid}: ${e?.message ?? e}`); failed++; }
   }

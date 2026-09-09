@@ -7,6 +7,11 @@ in N Häppchen und startet N Container gleichzeitig (--cpus=1 je Container, dami
 Dienste nicht verhungern). Resume-fest: Spiele mit fertigem Shard werden übersprungen.
 
   mat_launch.py <records_dir> <out_dir> <n_parallel> [--cpus 1] [--max N]
+
+Env-Variablen werden an die Container durchgereicht (NOOP_EVERY, NOOP_ONLY,
+NOOP_ALIGN, THIN, SUFFIX) — sonst kaeme die Nichtstun-Abtastung nie im
+Materializer an, weil der Code zwar live gemountet, die Umgebung aber nicht
+vererbt wird.
 """
 import json, os, sys, glob, subprocess, tempfile, time
 
@@ -26,6 +31,17 @@ def main():
     maxn = int(sys.argv[sys.argv.index("--max")+1]) if "--max" in sys.argv else 0
     os.makedirs(out_dir, exist_ok=True)
 
+    # An die Container weiterzureichende Schalter (nur gesetzte).
+    passthru = []
+    for k in ("NOOP_EVERY", "NOOP_ONLY", "NOOP_ALIGN", "THIN", "SUFFIX"):
+        if os.environ.get(k):
+            passthru += ["-e", f"{k}={os.environ[k]}"]
+    # Ein Nur-Nichtstun-Lauf schreibt <gid>.noop.* (siehe materialize.ts) — die
+    # Resume-Pruefung muss denselben Namen suchen, sonst laeuft alles doppelt.
+    suffix = os.environ.get("SUFFIX", ".noop" if os.environ.get("NOOP_ONLY") == "1" else "")
+    if passthru:
+        print(f"[launch] Schalter: {' '.join(passthru[1::2])}, Suffix '{suffix}'", flush=True)
+
     files = sorted(glob.glob(os.path.join(records_dir, "**", "*.json"), recursive=True))
     if maxn: files = files[:maxn]
     # nach Commit gruppieren, fertige überspringen
@@ -33,7 +49,7 @@ def main():
     skipped = 0
     for p in files:
         gid = os.path.basename(p)[:-5]
-        if os.path.exists(os.path.join(out_dir, f"{gid}.meta.zst")):
+        if os.path.exists(os.path.join(out_dir, f"{gid}{suffix}.meta.zst")):
             skipped += 1; continue
         c = commit_of(p)
         if not c: continue
@@ -46,22 +62,31 @@ def main():
 
     chunkdir = tempfile.mkdtemp(prefix="matchunks_")
     procs = []
+    # n = GESAMT-Container-Budget (≈ Kerne); pro Commit anteilig an Gruppengröße,
+    # damit alle Container etwa gleich lang laufen (kein Leerlauf im Tail).
     for commit, paths in groups.items():
-        # in n Häppchen round-robin
-        chunks = [[] for _ in range(n)]
+        k = max(1, round(n * len(paths) / max(total, 1)))
+        chunks = [[] for _ in range(k)]
         for i, p in enumerate(paths):
             rel = os.path.relpath(p, records_dir)
-            chunks[i % n].append(f"/in/{rel}")
+            chunks[i % k].append(f"/in/{rel}")
         for ci, ch in enumerate(chunks):
             if not ch: continue
             cf = os.path.join(chunkdir, f"{commit[:8]}_{ci}.txt")
             open(cf, "w").write("\n".join(ch))
-            cmd = ["docker", "run", "--rm", f"--cpus={cpus}",
-                   "-e", f"COMMIT={commit}",
+            cpuflag = [] if str(cpus) in ("0","") else [f"--cpus={cpus}"]
+            # tsconfig zusätzlich mounten, falls vorhanden: die Engine braucht
+            # useDefineForClassFields:false. So laufen alle Nodes identisch, egal
+            # welches (evtl. ältere) of-mat-Image lokal gebacken wurde.
+            tscfg = os.path.join(os.path.dirname(ENVDIR), "tsconfig.json")
+            tsmount = ["-v", f"{tscfg}:/app/tsconfig.json:ro"] if os.path.exists(tscfg) else []
+            cmd = ["docker", "run", "--rm", *cpuflag,
+                   "-e", f"COMMIT={commit}", *passthru,
                    "-v", f"{records_dir}:/in:ro",
                    "-v", f"{out_dir}:/out",
                    "-v", f"{chunkdir}:/chunks:ro",
                    "-v", f"{ENVDIR}:/app/env:ro",   # Live-Code, kein Image-Neubau
+                   *tsmount,
                    "of-mat", "--list", f"/chunks/{os.path.basename(cf)}", "/out"]
             log = open(os.path.join(out_dir, f".log_{commit[:8]}_{ci}"), "w")
             procs.append(subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT))

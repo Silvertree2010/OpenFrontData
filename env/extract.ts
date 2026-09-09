@@ -13,6 +13,10 @@
  * (actions.encode auf der Python-Seite). Gegner-Reihenfolge muss exakt der von
  * obs.encodeVec entsprechen, sonst zeigt der Ziel-Zeiger ins Leere.
  *
+ * Nichtstun: mit NOOP_EVERY=<K> entsteht zusaetzlich je K-tem intentlosen Tick
+ * und Spieler ein Sample mit intent {"type":"no_op"} und Gewicht w=K (Kehrwert
+ * der Abtastwahrscheinlichkeit). Gleiche Semantik wie in materialize.ts.
+ *
  *   npx tsx env/extract.ts <record.json> <out.jsonl> [--every 1]
  */
 import fs from "fs";
@@ -68,15 +72,61 @@ async function main() {
   // clientID der handelnden Menschen (Nationen/Bots emittieren keine Intents mit clientID)
   const humanClient = new Set(gameStart.players.map((p) => p.clientID));
 
-  let samples = 0, skippedNoPlayer = 0, byType: Record<string, number> = {};
+  let samples = 0, skippedNoPlayer = 0, noops = 0, noopChances = 0, byType: Record<string, number> = {};
   const t0 = performance.now();
+
+  // Nichtstun-Abtastung (siehe materialize.ts) — 0 = aus, Verhalten wie bisher.
+  const NOOP_EVERY = Number(process.env.NOOP_EVERY ?? 0);
+  const NOOP_ALIGN = process.env.NOOP_ALIGN === "1";
+  const NOOP_INTENT = { type: "no_op" };
+  const phases = new Map<string, number>();
+  const phaseOf = (cid: string) => {
+    let ph = phases.get(cid);
+    if (ph === undefined) { ph = NOOP_ALIGN ? 0 : Math.abs(simpleHash(cid)) % NOOP_EVERY; phases.set(cid, ph); }
+    return ph;
+  };
+  const disconnected = new Set<string>();
+
+  // Kontext eines Spielers im aktuellen Tick (encodeVec ist teuer → je Tick cachen).
+  const ctxCache = new Map<string, any>();
+  const ctxFor = (player: any, cid: string) => {
+    let ctx = ctxCache.get(cid);
+    if (!ctx) {
+      const v = enc.encodeVec(game, player, 24);
+      // Gegner-Reihenfolge → PlayerID (player.id()). Intent-Zielfelder
+      // (targetID/recipient/target/requestor) sind PlayerIDs, NICHT clientIDs
+      // — und Nationen/Bots haben eine id(), aber keine clientID. Der
+      // Handelnde wird dagegen per clientID gefunden (playerByClientID).
+      const oppIds = v.opponents.map((o) => {
+        const pl = game.playerBySmallID(o.id);
+        return pl.isPlayer() ? pl.id() : null;
+      });
+      ctx = {
+        mapW: W, mapH: H,
+        troops: player.troops(), gold: Number(player.gold()),
+        oppIds,
+        ownUnitIds: player.units().map((u: any) => u.id()),
+        ownAttackIds: player.outgoingAttacks().map((a: any) => a.id()),
+      };
+      ctxCache.set(cid, ctx);
+    }
+    return ctx;
+  };
 
   for (const turn of record.turns) {
     const intents = turn.intents ?? [];
+    for (const i of intents as any[]) {
+      if (i.type === "mark_disconnected" && i.clientID) {
+        if (i.isDisconnected === false) disconnected.delete(i.clientID);
+        else disconnected.add(i.clientID);
+      }
+    }
     // VOR dem Ausführen: Zustand = was der Spieler bei der Entscheidung sah
-    if (intents.length > 0 && !game.inSpawnPhase()) {
-      // Kontext je handelndem Spieler nur einmal berechnen (encodeVec ist teuer)
-      const ctxCache = new Map<string, any>();
+    if ((intents.length > 0 || NOOP_EVERY > 0) && !game.inSpawnPhase()) {
+      ctxCache.clear();
+      const acted = new Set<string>((intents as any[])
+        .filter((i) => i.clientID && humanClient.has(i.clientID) && i.type !== "mark_disconnected")
+        .map((i) => i.clientID));
       for (const intent of intents) {
         const cid = (intent as any).clientID;
         if (!cid || !humanClient.has(cid)) continue;
@@ -87,28 +137,22 @@ async function main() {
         const player = game.players().find((p) => p.clientID() === cid);
         if (!player || !player.isAlive()) { skippedNoPlayer++; continue; }
 
-        let ctx = ctxCache.get(cid);
-        if (!ctx) {
-          const v = enc.encodeVec(game, player, 24);
-          // Gegner-Reihenfolge → PlayerID (player.id()). Intent-Zielfelder
-          // (targetID/recipient/target/requestor) sind PlayerIDs, NICHT clientIDs
-          // — und Nationen/Bots haben eine id(), aber keine clientID. Der
-          // Handelnde wird dagegen per clientID gefunden (playerByClientID).
-          const oppIds = v.opponents.map((o) => {
-            const pl = game.playerBySmallID(o.id);
-            return pl.isPlayer() ? pl.id() : null;
-          });
-          ctx = {
-            mapW: W, mapH: H,
-            troops: player.troops(), gold: Number(player.gold()),
-            oppIds,
-            ownUnitIds: player.units().map((u) => u.id()),
-            ownAttackIds: player.outgoingAttacks().map((a) => a.id()),
-          };
-          ctxCache.set(cid, ctx);
-        }
-        out.write(JSON.stringify({ turn: turn.turnNumber, clientID: cid, ...ctx, intent }) + "\n");
+        const ctx = ctxFor(player, cid);
+        out.write(JSON.stringify({ turn: turn.turnNumber, clientID: cid, ...ctx, intent, w: 1 }) + "\n");
         samples++;
+      }
+      // Nichtstun: je K-tem intentlosen Tick ein Sample aus Sicht dieses Spielers
+      if (NOOP_EVERY > 0) for (const player of game.players()) {
+        if (!player.isAlive()) continue;
+        const cid = player.clientID();
+        if (!cid || !humanClient.has(cid) || acted.has(cid) || disconnected.has(cid)) continue;
+        noopChances++;
+        if ((turn.turnNumber + phaseOf(cid)) % NOOP_EVERY !== 0) continue;
+        const ctx = ctxFor(player, cid);
+        out.write(JSON.stringify({ turn: turn.turnNumber, clientID: cid, ...ctx,
+          intent: NOOP_INTENT, w: NOOP_EVERY }) + "\n");
+        samples++; noops++;
+        byType["no_op"] = (byType["no_op"] ?? 0) + 1;
       }
     }
     runner.addTurn(turn);
@@ -116,7 +160,8 @@ async function main() {
     if (fatal) { console.error("Fehler:", fatal); process.exit(1); }
   }
   out.end();
-  console.log(`${info.gameID} ${info.config.gameMap}: ${samples} Samples, ${skippedNoPlayer} ohne lebenden Spieler, ` +
+  console.log(`${info.gameID} ${info.config.gameMap}: ${samples} Samples (${noops} no-op von ${noopChances} ` +
+    `Gelegenheiten), ${skippedNoPlayer} ohne lebenden Spieler, ` +
     `${((performance.now() - t0) / 1000).toFixed(1)}s`);
   console.log("Intent-Typen:", JSON.stringify(byType));
 }
