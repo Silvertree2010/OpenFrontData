@@ -25,7 +25,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 import actions as AC
 import dataset as D
 from net import Net, NUM_MAP_CH, GH, GW, EMB, CORE
+import bc_train as BT                  # Schalter werden auf dem MODUL gesetzt,
 from bc_train import masked_loss, accuracy, IGNORE_INDEX, ADV_BETA, VALUE_W
+# damit masked_loss sie zur Laufzeit sieht (nicht per from-Import einfrieren).
 
 try:                                  # Instrumentierung ist optional: fehlt sie
     import metrics as MET             # oder bricht sie, laeuft das Training trotzdem.
@@ -214,7 +216,28 @@ def main():
                     help="Record-Dirs fuer Config/Modifier-Lookup (gameID->config)")
     ap.add_argument("--no-metrics", action="store_true", help="Live-Board-Instrumentierung abschalten")
     ap.add_argument("--metrics-path", default="logs/metrics.jsonl")
+    # --- Kachel-Zeiger (Standard: aus = altes Verhalten, siehe bc_train.py) ---
+    ap.add_argument("--coarse-sigma", type=float, default=None,
+                    help="Breite (in GROBZELLEN) des weichen Gauss-Ziels fuer den Grob-Kopf; "
+                         "0/weglassen = hartes CE wie bisher")
+    ap.add_argument("--coarse-soft-mix", type=float, default=None,
+                    help="Anteil des weichen Ziels am Grob-Verlust (Rest hartes CE), Standard 1.0")
+    ap.add_argument("--fine-off", action="store_true",
+                    help="Fein-Kopf aus Verlust und Vorhersage nehmen; Feinposition = Mitte der Grobzelle")
     a = ap.parse_args()
+
+    # Schalter auf dem bc_train-Modul setzen (CLI schlaegt Umgebungsvariable).
+    if a.coarse_sigma is not None:
+        BT.COARSE_SIGMA = float(a.coarse_sigma)
+    if a.coarse_soft_mix is not None:
+        BT.COARSE_SOFT_MIX = float(a.coarse_soft_mix)
+    if a.fine_off:
+        BT.FINE_OFF = True
+    sw = BT.tile_switches()
+    if sw["coarse_sigma"] > 0 or sw["fine_off"]:
+        print(f"[kachel] Grob-Sigma {sw['coarse_sigma']} (Mix {sw['coarse_soft_mix']}), "
+              f"Fein-Kopf {'AUS -> Zellmitte ' + str(sw['fine_center']) if sw['fine_off'] else 'an'}",
+              flush=True)
 
     records_dirs = a.records_dir
     D.load_reputation(a.reputation)
@@ -267,6 +290,7 @@ def main():
                       epochs=a.epochs, batch=a.batch, lr=a.lr,
                       games_total=len(all_games), games_train=len(train_g),
                       games_val=len(val_g), adv_beta=ADV_BETA, value_w=VALUE_W,
+                      tiles=BT.tile_switches(),
                       params=int(params), heads=HEADS, head_sizes=AC.HEAD_SIZES,
                       core_heads=list(CORE_HEADS), atype_names=[x.name for x in AC.A],
                       layers=layers, bytes_per_sample=NUM_MAP_CH * GH * GW * 4)
