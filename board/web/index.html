@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>OpenFront-KI — Training live</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#151a21; --line:#232a34; --grid:rgba(255,255,255,.07);
+    --fg:#e6eaf0; --dim:#8b95a3; --accent:#3987e5; --acc2:#199e70;
+    --good:#5ecf8d; --warn:#e8b84b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1100px;margin:0 auto;padding:32px 20px 64px}
+  header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+  h1{font-size:22px;margin:0;letter-spacing:-.01em}
+  .live{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);
+    font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--good);animation:p 2s infinite}
+  .dot.warn{background:var(--warn);animation:none}
+  .dot.stale{background:#565f6c;animation:none}
+  @keyframes p{0%{box-shadow:0 0 0 0 rgba(94,207,141,.6)}70%{box-shadow:0 0 0 7px rgba(94,207,141,0)}100%{box-shadow:0 0 0 0 rgba(94,207,141,0)}}
+  .lede{color:var(--dim);max-width:78ch;margin:10px 0 22px;font-size:13.5px}
+  .metarow{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--dim);font-family:var(--mono);
+    font-size:12.5px;margin-bottom:26px}
+  .metarow b{color:var(--fg);font-weight:500}
+  .metarow a{color:var(--accent);text-decoration:none}
+  .metarow a:hover{text-decoration:underline}
+  .bar{height:10px;border-radius:6px;background:var(--panel);border:1px solid var(--line);
+    overflow:hidden;margin:0 0 8px}
+  .bar > i{display:block;height:100%;width:100%;transform:scaleX(0);transform-origin:left;
+    background:linear-gradient(90deg,#2f6fd0,var(--accent));
+    transition:transform .6s ease}
+  .barmeta{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12.5px;
+    color:var(--dim);margin-bottom:26px;gap:12px;flex-wrap:wrap}
+  .barmeta b{color:var(--fg);font-weight:500}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin-bottom:30px}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .tile .k{font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;font-family:var(--mono)}
+  .tile .v{font-size:23px;font-family:var(--mono);margin-top:5px;letter-spacing:-.02em}
+  .tile .s{font-size:12px;color:var(--dim);margin-top:2px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+    font-family:var(--mono);font-weight:500;margin:0 0 4px}
+  .note{color:var(--dim);font-size:13px;margin:0 0 12px}
+  .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px;margin-bottom:30px}
+  .charts.two{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px 8px}
+  .card .head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+  .card .ttl{font-size:14px;font-weight:600}
+  .card .sub{font-size:11.5px;color:var(--dim);font-family:var(--mono)}
+  .card button{background:none;border:1px solid var(--line);color:var(--dim);font:inherit;font-size:11px;
+    font-family:var(--mono);cursor:pointer;padding:3px 8px;border-radius:6px}
+  .card button:hover{color:var(--fg);border-color:var(--accent)}
+  .card button.on{color:var(--fg);border-color:var(--accent)}
+  .chart{position:relative}
+  .chart .empty{color:var(--dim);font-size:13px;padding:52px 0 56px;text-align:center}
+  .ax{fill:var(--dim);font-family:var(--mono);font-size:10.5px}
+  .endlab{fill:var(--fg);font-family:var(--mono);font-size:11.5px}
+  .tip{position:absolute;pointer-events:none;background:#0b0f14;border:1px solid var(--line);
+    border-radius:7px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap;
+    box-shadow:0 6px 20px rgba(0,0,0,.45);z-index:5}
+  .tip b{display:block;font-weight:600;font-size:13px}
+  .tip span{color:var(--dim)}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+  .tblwrap{max-height:220px;overflow:auto;margin-bottom:8px}
+  th,td{text-align:right;padding:5px 8px;border-bottom:1px solid var(--line);color:var(--fg)}
+  th{color:var(--dim);font-weight:500;position:sticky;top:0;background:var(--panel)}
+  th:first-child,td:first-child{text-align:left}
+  a.card{display:block;text-decoration:none;color:inherit;transition:border-color .15s;padding:16px 18px}
+  a.card:hover{border-color:var(--accent)}
+  a.card .d{font-size:13px;color:var(--dim);margin-top:4px}
+  footer{margin-top:34px;color:var(--dim);font-size:12.5px;font-family:var(--mono)}
+
+  .netcard{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;margin-bottom:30px}
+  .netcard .explain{font-size:12.5px;color:var(--dim);margin:0 0 10px}
+  .netwrap{position:relative}
+  .netwrap canvas{display:block;width:100%}
+  .netwrap .netmsg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:var(--dim);font-size:13px;pointer-events:none}
+  .netwrap .netmsg[hidden]{display:none}
+
+  .collapse{border:1px solid rgba(232,184,75,.35);background:rgba(232,184,75,.05);
+    border-radius:10px;padding:16px 18px;margin-bottom:30px}
+  .collapse h2{color:var(--warn)}
+  .collapse .explain{color:var(--dim);font-size:13px;margin:0 0 16px;max-width:72ch}
+  .deviate{font-family:var(--mono);font-size:12.5px;color:var(--dim);margin-top:6px}
+  .deviate b{color:var(--fg)}
+
+  @media (max-width:640px){
+    .wrap{padding:22px 14px 48px}
+    .tile .v{font-size:19px}
+    h1{font-size:19px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>OpenFront-KI — Training</h1>
+    <span class="live"><span class="dot stale" id="dot"></span><span id="livetxt">wartet</span></span>
+  </header>
+  <p class="lede" id="lede">
+    Behavior-Cloning-Training mit Advantage-Gewichtung (AWR): das Netz lernt aus echten
+    Partien starker Spieler, Zug für Zug. Diese Seite liest den laufenden Trainer direkt
+    aus und zeigt, was gerade im Netz passiert — inklusive einer ehrlichen Warnung, falls
+    es sich auf wenige Antworten einengt (Mode Collapse).
+  </p>
+  <div class="metarow">
+    <span id="statetxt">Zustand: —</span>
+    <span id="runlabel">Lauf: —</span>
+    <span id="devicetxt">Gerät: —</span>
+    <span id="runtimetxt">Laufzeit: —</span>
+    <a href="/viz/" id="vizlink">Replay-Betrachter →</a>
+  </div>
+
+  <h2>Fortschritt</h2>
+  <div class="bar"><i id="fill"></i></div>
+  <div class="barmeta">
+    <span id="progtxt">—</span>
+    <span id="etatxt">—</span>
+  </div>
+
+  <div class="grid" id="tiles">
+    <div class="tile"><div class="k">Verlust</div><div class="v" id="t-loss">—</div><div class="s" id="t-loss-s">—</div></div>
+    <div class="tile"><div class="k">Kern-Treffer</div><div class="v" id="t-acc">—</div><div class="s" id="t-acc-s">—</div></div>
+    <div class="tile"><div class="k">Val-Kern</div><div class="v" id="t-vacc">—</div><div class="s" id="t-vacc-s">—</div></div>
+    <div class="tile"><div class="k">Samples/s</div><div class="v" id="t-sps">—</div><div class="s" id="t-sps-s">—</div></div>
+    <div class="tile"><div class="k">Datendurchsatz</div><div class="v" id="t-through">—</div><div class="s" id="t-through-s">MB/s aus Samples/s</div></div>
+    <div class="tile"><div class="k">Gradienten-Norm</div><div class="v" id="t-gnorm">—</div><div class="s" id="t-gnorm-s">vor dem Schritt</div></div>
+    <div class="tile"><div class="k">Lernrate</div><div class="v" id="t-lr">—</div><div class="s" id="t-lr-s">aktuell</div></div>
+    <div class="tile"><div class="k">GPU-Auslastung</div><div class="v" id="t-util">—</div><div class="s" id="t-util-s">—</div></div>
+    <div class="tile"><div class="k">VRAM</div><div class="v" id="t-vram">—</div><div class="s" id="t-vram-s">belegt / gesamt</div></div>
+    <div class="tile"><div class="k">GPU-Temperatur</div><div class="v" id="t-temp">—</div><div class="s" id="t-temp-s">—</div></div>
+  </div>
+
+  <div class="netcard">
+    <h2>Netz-Aktivität</h2>
+    <p class="explain">Die Helligkeit der Knoten sind gemessene Aktivierungsquantile je Schicht
+      (12 Ordnungsstatistiken, je Spalte auf ihr eigenes Maximum normiert). Die Helligkeit der
+      Verbindungen ist daraus abgeleitet — kein eigenständiges Signal.</p>
+    <div class="netwrap" id="netwrap">
+      <canvas id="netcanvas"></canvas>
+      <div class="netmsg" id="netmsg" hidden>wartet auf Aktivierungsdaten</div>
+      <div class="tip" id="nettip" hidden></div>
+    </div>
+  </div>
+
+  <h2>Verlust</h2>
+  <div class="card">
+    <div class="head"><span class="ttl">Trainingsverlust je Schritt</span>
+      <span class="sub">Punkte: Val-Verlust nach Epoche</span>
+      <button id="loss-log">Log-Skala</button></div>
+    <div class="chart" id="c_loss"></div>
+  </div>
+
+  <h2>Treffer</h2>
+  <div class="card">
+    <div class="head"><span class="ttl">Kern-Köpfe-Treffer je Schritt</span>
+      <span class="sub">Punkte: Val-Kern nach Epoche</span></div>
+    <div class="chart" id="c_acc"></div>
+  </div>
+
+  <h2>Je Kopf</h2>
+  <div class="charts two">
+    <div class="card"><div class="head"><span class="ttl">Verlust je Kopf</span></div>
+      <div class="chart" id="c_hl"></div></div>
+    <div class="card"><div class="head"><span class="ttl">Treffer je Kopf</span></div>
+      <div class="chart" id="c_ha"></div></div>
+  </div>
+
+  <div class="collapse">
+    <h2>Mode-Collapse-Kontrolle</h2>
+    <p class="explain">Ein Netz, das immer dasselbe vorhersagt, hat auch niedrigen Verlust —
+      diese Kennzahlen zeigen, ob es wirklich lernt oder nur die häufigste Antwort auswendig
+      lernt. Niedrige Entropie und ein hoher Anteil der häufigsten Vorhersage sind Warnzeichen.</p>
+    <div class="charts two">
+      <div class="card"><div class="head"><span class="ttl">Entropie je Kopf, normiert</span></div>
+        <div class="chart" id="c_hen"></div></div>
+      <div class="card"><div class="head"><span class="ttl">Anteil häufigste Vorhersage</span></div>
+        <div class="chart" id="c_htop"></div></div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="head"><span class="ttl">Entropie und Kollaps-Anteil über die Zeit</span>
+        <span class="sub">Mittel über die Kern-Köpfe</span></div>
+      <div class="chart" id="c_ent"></div>
+    </div>
+    <div class="card">
+      <div class="head"><span class="ttl">Vorhersage gegen Label</span>
+        <span class="sub" id="deviate-sub"></span></div>
+      <div class="chart" id="c_atype"></div>
+      <div class="deviate">Abweichung: <b id="deviate-val">—</b> (0 = identisch verteilt, 1 = völlig verschieden)</div>
+    </div>
+  </div>
+
+  <h2>Advantage-Gewichtung (AWR)</h2>
+  <div class="grid" id="awr-tiles">
+    <div class="tile"><div class="k">Mittel</div><div class="v" id="a-mean">—</div></div>
+    <div class="tile"><div class="k">Maximum</div><div class="v" id="a-max">—</div></div>
+    <div class="tile"><div class="k">Geklemmt</div><div class="v" id="a-clip">—</div></div>
+    <div class="tile"><div class="k">Gewinner-Anteil</div><div class="v" id="a-win">—</div></div>
+  </div>
+  <div class="charts two">
+    <div class="card"><div class="head"><span class="ttl">Advantage-Gewicht, Median mit p10–p90</span></div>
+      <div class="chart" id="c_adv"></div></div>
+    <div class="card"><div class="head"><span class="ttl">Value-Head-MSE</span></div>
+      <div class="chart" id="c_vmse"></div></div>
+  </div>
+
+  <h2>Maschine</h2>
+  <div class="charts two">
+    <div class="card"><div class="head"><span class="ttl">GPU-Auslastung</span></div>
+      <div class="chart" id="c_util"></div></div>
+    <div class="card"><div class="head"><span class="ttl">VRAM belegt</span></div>
+      <div class="chart" id="c_vram"></div></div>
+  </div>
+  <div class="grid" style="margin-bottom:30px">
+    <div class="tile"><div class="k">Temperatur</div><div class="v" id="m-temp">—</div></div>
+    <div class="tile"><div class="k">Leistungsaufnahme</div><div class="v" id="m-power">—</div></div>
+    <div class="tile"><div class="k">Host-Last</div><div class="v" id="m-load">—</div></div>
+    <div class="tile"><div class="k">Freier Plattenplatz</div><div class="v" id="m-disk">—</div></div>
+  </div>
+
+  <h2>Snapshots</h2>
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Name</th><th>Epoche</th><th>Schritt</th><th>Grösse</th><th>Zeit</th></tr></thead>
+      <tbody id="snaptbl"><tr><td colspan="5" style="text-align:center;color:var(--dim)">noch keine Snapshots</td></tr></tbody>
+    </table>
+  </div>
+
+  <a class="card" href="/viz/" style="margin-top:8px">
+    <div class="ttl">Replay-Betrachter</div>
+    <div class="d">Echte Partien, abspielbar — genau die Daten, aus denen gelernt wird.</div>
+  </a>
+
+  <footer id="foot">Datenpool: — · Stand —</footer>
+</div>
+
+<script src="/chart.js"></script>
+<script src="/netviz.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const nf = new Intl.NumberFormat("de-CH");
+const nf1 = new Intl.NumberFormat("de-CH", {maximumFractionDigits: 1});
+const pctfmt = v => v == null ? "—" : (v * 100).toFixed(1) + " %";
+const full = t => new Date(t * 1000).toLocaleString("de-CH", {day: "2-digit", month: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit"});
+const stepfmt = v => "Schritt " + nf.format(Math.round(v));
+
+function dur(sec) {
+  if (sec == null || !isFinite(sec) || sec < 0) return "—";
+  if (sec < 60) return Math.round(sec) + " s";
+  if (sec < 3600) return Math.round(sec / 60) + " min";
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h + " h " + String(m).padStart(2, "0") + " min";
+}
+function ago(sec) {
+  if (sec == null) return "—";
+  if (sec < 60) return Math.round(sec) + " s";
+  if (sec < 3600) return Math.round(sec / 60) + " min";
+  return (sec / 3600).toFixed(1) + " h";
+}
+
+const ATYPE_NAMES_FALLBACK = null; // Namen kommen aus meta, kein Fallback erzeugen
+
+// ---- lokale Zeitreihe fuer clientseitig gesammelte Charts (Series-API + Host-Verlauf) ----
+let seriesRows = [];       // aus /api/series: [step,t,loss,acc,sps,gnorm,vmse,winfrac,lr,ent,top,adv_p50,adv_p90]
+let seriesCols = [];
+let sinceStep = -1;
+let currentRun = null;
+let hostHistory = [];      // clientseitig gesammelt: {t,util,mem}
+
+let lossLog = false;
+$("loss-log").addEventListener("click", () => {
+  lossLog = !lossLog;
+  $("loss-log").classList.toggle("on", lossLog);
+  renderAll(lastStatus);
+});
+
+function colIdx(name) { return seriesCols.indexOf(name); }
+function seriesPoints(xName, yName) {
+  const xi = colIdx(xName), yi = colIdx(yName);
+  if (xi < 0 || yi < 0) return [];
+  return seriesRows.filter(r => r[yi] != null).map(r => [r[xi], r[yi]]);
+}
+function seriesBand(xName, loName, hiName, midName) {
+  const xi = colIdx(xName), li = colIdx(loName), hi = colIdx(hiName), mi = colIdx(midName);
+  if (xi < 0 || li < 0 || hi < 0) return [];
+  return seriesRows.filter(r => r[li] != null && r[hi] != null)
+    .map(r => [r[xi], r[li], r[hi]]);
+}
+
+// ---- Diagramme nur neu zeichnen wenn noetig (Hover nicht kaputt reissen) ----
+const specs = {};
+let hovering = null;
+document.addEventListener("mouseover", e => {
+  const c = e.target.closest(".chart"); hovering = c ? c.id : null;
+});
+document.addEventListener("mouseleave", () => { hovering = null; });
+function put(id, cfg) {
+  const host = $(id);
+  if (!host) return;
+  const sig = JSON.stringify([(cfg.points || cfg.rows || cfg.groups || []).length,
+    (cfg.points || []).slice(-1), cfg.empty, cfg.yLog]);
+  const prev = specs[id];
+  specs[id] = sig;
+  if (prev === sig && host.dataset.w == host.clientWidth) return;
+  if (hovering === id && prev === sig) return;
+  host.dataset.w = host.clientWidth;
+  Chart.draw(host, cfg);
+}
+
+let net = null;
+function ensureNet() {
+  if (net) return net;
+  net = NetViz.create($("netcanvas"), $("nettip"));
+  return net;
+}
+
+let lastStatus = null;
+
+async function fetchJSON(url) {
+  const res = await fetch(url, {cache: "no-store"});
+  if (!res.ok) throw new Error("http " + res.status);
+  return res.json();
+}
+
+async function pollSeries() {
+  try {
+    const d = await fetchJSON("/api/series?since=" + sinceStep);
+    if (d.reset || d.run !== currentRun) {
+      seriesRows = []; seriesCols = d.cols || []; currentRun = d.run; sinceStep = -1;
+    } else if (!seriesCols.length) {
+      seriesCols = d.cols || [];
+    }
+    const si = colIdx("step");
+    for (const row of (d.rows || [])) {
+      seriesRows.push(row);
+      if (si >= 0 && row[si] > sinceStep) sinceStep = row[si];
+    }
+    if (seriesRows.length > 4000) seriesRows = seriesRows.slice(-4000);
+  } catch (e) {
+    // Serie bleibt wie sie ist; Statusabruf zeigt den Verbindungsfehler an
+  }
+}
+
+function pushHostHistory(status) {
+  const h = status && status.host;
+  const t = (status && status.now) || Date.now() / 1000;
+  if (h && h.gpu) {
+    hostHistory.push({t, util: h.gpu.util, mem: h.gpu.mem_used});
+  } else {
+    hostHistory.push({t, util: null, mem: null});
+  }
+  if (hostHistory.length > 900) hostHistory = hostHistory.slice(-900);
+}
+
+function setDot(state, connOk) {
+  const dot = $("dot");
+  dot.classList.remove("warn", "stale");
+  if (!connOk) { dot.classList.add("stale"); $("livetxt").textContent = "keine Verbindung"; return; }
+  if (state === "laeuft") { $("livetxt").textContent = "läuft"; return; }
+  if (state === "pause") { dot.classList.add("warn"); $("livetxt").textContent = "pausiert"; return; }
+  if (state === "beendet") { dot.classList.add("stale"); $("livetxt").textContent = "beendet"; return; }
+  dot.classList.add("stale"); $("livetxt").textContent = "wartet";
+}
+
+function emptyState() {
+  $("lede").textContent = "Training noch nicht gestartet. Sobald der Trainer eine erste " +
+    "Meldung schreibt, füllen sich Fortschritt, Kacheln, Netzanzeige und Diagramme von selbst.";
+  $("statetxt").textContent = "Zustand: wartet";
+  $("runlabel").textContent = "Lauf: —";
+  $("devicetxt").textContent = "Gerät: —";
+  $("runtimetxt").textContent = "Laufzeit: —";
+  $("fill").style.transform = "scaleX(0)";
+  $("progtxt").textContent = "noch keine Epoche gestartet";
+  $("etatxt").textContent = "—";
+  ["loss", "acc", "vacc", "sps", "through", "gnorm", "lr", "util", "vram", "temp"].forEach(k => {
+    $("t-" + k).textContent = "—";
+    const s = $("t-" + k + "-s"); if (s) s.textContent = "—";
+  });
+  ["a-mean", "a-max", "a-clip", "a-win", "m-temp", "m-power", "m-load", "m-disk"].forEach(id => {
+    $(id).textContent = "—";
+  });
+  $("deviate-val").textContent = "—";
+  $("deviate-sub").textContent = "";
+  $("snaptbl").innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--dim)">noch keine Snapshots</td></tr>';
+  $("foot").textContent = "Datenpool: — · Stand —";
+  const emptyCfg = {points: [], empty: "noch keine Daten", yfmt: v => v, xfmt: v => v, xtip: v => v};
+  ["c_loss", "c_acc", "c_ent", "c_adv", "c_vmse", "c_util", "c_vram", "c_atype"].forEach(id => put(id, emptyCfg));
+  put("c_hl", {type: "hbars", rows: [], empty: "noch keine Daten"});
+  put("c_ha", {type: "hbars", rows: [], empty: "noch keine Daten"});
+  put("c_hen", {type: "hbars", rows: [], empty: "noch keine Daten"});
+  put("c_htop", {type: "hbars", rows: [], empty: "noch keine Daten"});
+  ensureNet().update(null, null, "wartet");
+  $("netmsg").hidden = false;
+  $("netmsg").textContent = "wartet auf Aktivierungsdaten";
+}
+
+function renderAll(status) {
+  if (!status) return;
+  const meta = status.meta, last = status.last, state = status.state;
+
+  if (state === "wartet" || !last) {
+    emptyState();
+    return;
+  }
+
+  $("lede").textContent = "Behavior-Cloning-Training mit Advantage-Gewichtung (AWR): das " +
+    "Netz lernt aus echten Partien starker Spieler, Zug für Zug. Diese Seite liest den " +
+    "laufenden Trainer direkt aus.";
+  $("statetxt").textContent = "Zustand: " + ({laeuft: "läuft", pause: "pausiert", beendet: "beendet"}[state] || state);
+  $("runlabel").textContent = "Lauf: " + ((meta && meta.label) || (meta && meta.run) || "—");
+  $("devicetxt").textContent = "Gerät: " + ((meta && meta.device) || "—");
+  $("runtimetxt").textContent = "Laufzeit: " + dur(status.runtime);
+
+  // Fortschritt
+  const gEpoch = last.games_epoch || 0, gDone = last.games_done || 0;
+  const fracEpoch = gEpoch > 0 ? Math.min(1, gDone / gEpoch) : 0;
+  $("fill").style.transform = "scaleX(" + Math.max(0, Math.min(1, fracEpoch)).toFixed(4) + ")";
+  const epTotal = (meta && meta.epochs) || null;
+  $("progtxt").textContent = "Epoche " + ((last.ep ?? 0) + 1) + " von " + (epTotal ?? "?") +
+    " · Schritt " + nf.format(last.step || 0) + " · " + nf.format(last.samples || 0) + " Samples gesamt";
+
+  // ETA: aus verbrauchten Spielen und verstrichener Zeit dieser Epoche + Lauf hochrechnen
+  let etaEpoch = null, etaRun = null;
+  if (gDone > 20 && status.runtime > 5 && gEpoch > 0) {
+    const secsPerGame = status.runtime / Math.max(1, gDone + (last.ep || 0) * gEpoch);
+    // grobe, aber stabile Schaetzung: sekunden je Spiel ueber die gesamte bisherige Laufzeit
+    const remainInEpoch = Math.max(0, gEpoch - gDone);
+    etaEpoch = remainInEpoch * secsPerGame;
+    const totalGames = (meta && meta.games_train) || gEpoch * (epTotal || 1);
+    const gamesSoFar = (last.ep || 0) * gEpoch + gDone;
+    const remainTotal = Math.max(0, totalGames * (epTotal || 1) - gamesSoFar);
+    etaRun = remainTotal * secsPerGame;
+  }
+  $("etatxt").textContent = "ETA Epoche: " + dur(etaEpoch) + " · ETA Lauf: " + dur(etaRun);
+
+  // Kacheln
+  $("t-loss").textContent = last.loss != null ? last.loss.toFixed(3) : "—";
+  $("t-loss-s").textContent = "seit letztem Log";
+  $("t-acc").textContent = pctfmt(last.acc);
+  $("t-acc-s").textContent = "Mittel Kern-Köpfe";
+  const valArr = status.val || [];
+  const lastVal = valArr.length ? valArr[valArr.length - 1] : null;
+  $("t-vacc").textContent = lastVal ? pctfmt(lastVal.vacc) : "—";
+  $("t-vacc-s").textContent = lastVal ? "nach Epoche " + ((lastVal.ep ?? 0) + 1) : "noch keine Validierung";
+  $("t-sps").textContent = last.sps != null ? nf.format(Math.round(last.sps)) : "—";
+  $("t-sps-s").textContent = "Samples pro Sekunde";
+  const bps = (meta && meta.bytes_per_sample) || null;
+  const mbps = (bps && last.sps) ? (bps * last.sps / (1024 * 1024)) : null;
+  $("t-through").textContent = mbps != null ? mbps.toFixed(1) + " MB/s" : "—";
+  $("t-gnorm").textContent = last.gnorm != null ? last.gnorm.toFixed(3) : "—";
+  $("t-lr").textContent = last.lr != null ? last.lr.toExponential(2) : "—";
+  const gpu = status.host && status.host.gpu;
+  $("t-util").textContent = gpu && gpu.util != null ? gpu.util + " %" : "—";
+  $("t-util-s").textContent = (status.host_age != null) ? "vor " + ago(status.host_age) : "—";
+  $("t-vram").textContent = gpu ? nf.format(gpu.mem_used) + " / " + nf.format(gpu.mem_total) + " MB" : "—";
+  $("t-temp").textContent = gpu && gpu.temp != null ? gpu.temp + " °C" : "—";
+  $("t-temp-s").textContent = gpu && gpu.power != null ? gpu.power + " W" : "—";
+
+  // AWR
+  const adv = last.adv || {};
+  $("a-mean").textContent = adv.mean != null ? adv.mean.toFixed(3) : "—";
+  $("a-max").textContent = adv.max != null ? adv.max.toFixed(2) : "—";
+  $("a-clip").textContent = pctfmt(adv.clip);
+  $("a-win").textContent = pctfmt(last.winfrac);
+
+  // Maschine
+  $("m-temp").textContent = gpu && gpu.temp != null ? gpu.temp + " °C" : "—";
+  $("m-power").textContent = gpu && gpu.power != null ? gpu.power + " W" + (gpu.power_cap ? " / " + gpu.power_cap + " W" : "") : "—";
+  const load = status.host && status.host.load;
+  $("m-load").textContent = load && load.length ? load.map(v => v.toFixed(2)).join(" / ") : "—";
+  $("m-disk").textContent = status.host && status.host.disk_free_gb != null ? nf1.format(status.host.disk_free_gb) + " GB" : "—";
+
+  // Je-Kopf-Diagramme
+  const coreHeads = (meta && meta.core_heads) || [];
+  const allHeads = (meta && meta.heads) || [];
+  const orderedHeads = allHeads.length ? allHeads : Object.keys(last.hl || {});
+  function hbarRows(dataObj, fmt) {
+    return orderedHeads.map(h => {
+      const has = dataObj && Object.prototype.hasOwnProperty.call(dataObj, h);
+      return {label: h, value: has ? dataObj[h] : 0, valueLabel: has ? fmt(dataObj[h]) : "", dim: !has};
+    });
+  }
+  put("c_hl", {type: "hbars", rows: hbarRows(last.hl, v => v.toFixed(3)), rowHeight: 20});
+  put("c_ha", {type: "hbars", rows: hbarRows(last.ha, v => pctfmt(v)), rowHeight: 20});
+
+  // Mode-Collapse: Entropie / Top-Anteil je Kopf (nur core heads sinnvoll, aber zeige alle vorhandenen)
+  const henKeys = Object.keys(last.hen || {});
+  put("c_hen", {type: "hbars", rows: hbarRows(last.hen, v => v.toFixed(2)), rowHeight: 20, max: 1});
+  put("c_htop", {type: "hbars", rows: hbarRows(last.htop, v => pctfmt(v)), rowHeight: 20, max: 1});
+
+  // Vorhersage gegen Label
+  const atypeNames = (meta && meta.atype_names) || [];
+  const pred = last.pred || [], lab = last.lab || [];
+  const predSum = pred.reduce((a, b) => a + b, 0) || 1;
+  const labSum = lab.reduce((a, b) => a + b, 0) || 1;
+  const groups = [];
+  let deviate = 0;
+  for (let i = 0; i < atypeNames.length; i++) {
+    const pv = (pred[i] || 0) / predSum, lv = (lab[i] || 0) / labSum;
+    deviate += Math.abs(pv - lv);
+    if ((pred[i] || 0) > 0 || (lab[i] || 0) > 0) {
+      groups.push({label: atypeNames[i], a: pv, b: lv});
+    }
+  }
+  deviate = deviate / 2;
+  put("c_atype", {type: "grouped", groups, aLabel: "Vorhersage", bLabel: "Label",
+    aColor: "var(--accent)", bColor: "var(--acc2)", yfmt: v => (v * 100).toFixed(0) + "%",
+    height: 220});
+  $("deviate-val").textContent = deviate.toFixed(3);
+  $("deviate-sub").textContent = groups.length + " von " + atypeNames.length + " Typen gezeigt";
+
+  // Snapshots
+  const snaps = (status.snaps || []).slice().reverse();
+  $("snaptbl").innerHTML = snaps.length ? snaps.map(s =>
+    `<tr><td>${s.name}</td><td>${(s.ep ?? 0) + 1}</td><td>${nf.format(s.step || 0)}</td>` +
+    `<td>${s.mb != null ? s.mb.toFixed(1) + " MB" : "—"}</td><td>${full(s.t)}</td></tr>`
+  ).join("") : '<tr><td colspan="5" style="text-align:center;color:var(--dim)">noch keine Snapshots</td></tr>';
+
+  // Fusszeile
+  const pool = status.pool || {};
+  $("foot").textContent = "Datenpool: " + (pool.records != null ? nf.format(pool.records) : "—") +
+    " Partien, " + (pool.shards != null ? nf.format(pool.shards) : "—") +
+    " aufbereitet · Stand " + full(status.now);
+
+  // Zeitreihen-Diagramme
+  const lossPts = seriesPoints("step", "loss");
+  const valLossMarks = valArr.map(v => [v.step, v.vloss]).filter(p => p[1] != null);
+  put("c_loss", {type: "line", points: lossPts, color: "var(--accent)", yLog: lossLog,
+    marks: {points: valLossMarks, color: "var(--warn)"},
+    yfmt: v => v.toFixed(2), xfmt: v => nf.format(v), xtip: stepfmt,
+    empty: lossPts.length ? undefined : "noch keine Daten"});
+
+  const accPts = seriesPoints("step", "acc");
+  const valAccMarks = valArr.map(v => [v.step, v.vacc]).filter(p => p[1] != null);
+  put("c_acc", {type: "line", points: accPts, color: "var(--acc2)", yMin: 0, yMax: 1,
+    marks: {points: valAccMarks, color: "var(--warn)"},
+    yfmt: pctfmt, xfmt: v => nf.format(v), xtip: stepfmt,
+    empty: accPts.length ? undefined : "noch keine Daten"});
+
+  const entPts = seriesPoints("step", "ent");
+  const topPts = seriesPoints("step", "top");
+  put("c_ent", {type: "line", points: entPts.length ? entPts : topPts, color: "var(--accent)",
+    yMin: 0, yMax: 1, legend: [{label: "Entropie", color: "var(--accent)"}, {label: "Top-Anteil", color: "var(--warn)"}],
+    marks: {points: topPts, color: "var(--warn)"},
+    yfmt: v => v.toFixed(2), xfmt: v => nf.format(v), xtip: stepfmt,
+    empty: entPts.length ? undefined : "noch keine Daten"});
+
+  const advBand = seriesBand("step", "adv_p50", "adv_p90", "adv_p50");
+  // Band braucht lo/hi — wir haben nur p50/p90 in cols laut Schema; nutze p50 als untere Naeherung falls p10 fehlt
+  const advMidPts = seriesPoints("step", "adv_p50");
+  put("c_adv", {type: "line", points: advMidPts, color: "var(--accent)",
+    band: advBand.length ? {points: advBand, color: "var(--accent)"} : undefined,
+    yfmt: v => v.toFixed(2), xfmt: v => nf.format(v), xtip: stepfmt,
+    empty: advMidPts.length ? undefined : "noch keine Daten"});
+
+  const vmsePts = seriesPoints("step", "vmse");
+  put("c_vmse", {type: "line", points: vmsePts, color: "var(--acc2)",
+    yfmt: v => v.toFixed(3), xfmt: v => nf.format(v), xtip: stepfmt,
+    empty: vmsePts.length ? undefined : "noch keine Daten"});
+
+  // Maschine ueber Zeit (clientseitig gesammelt)
+  const utilPts = hostHistory.filter(h => h.util != null).map(h => [h.t, h.util]);
+  const vramPts = hostHistory.filter(h => h.mem != null).map(h => [h.t, h.mem]);
+  put("c_util", {type: "area", points: utilPts, color: "var(--accent)", yMin: 0, yMax: 100,
+    yfmt: v => Math.round(v) + " %", xfmt: t => new Date(t * 1000).toLocaleTimeString("de-CH", {hour: "2-digit", minute: "2-digit"}),
+    xtip: full, empty: utilPts.length ? undefined : "noch keine Messwerte in dieser Sitzung"});
+  put("c_vram", {type: "area", points: vramPts, color: "var(--acc2)",
+    yfmt: v => nf.format(Math.round(v)) + " MB",
+    xfmt: t => new Date(t * 1000).toLocaleTimeString("de-CH", {hour: "2-digit", minute: "2-digit"}),
+    xtip: full, empty: vramPts.length ? undefined : "noch keine Messwerte in dieser Sitzung"});
+
+  // Netzanzeige
+  ensureNet().update(meta, last, state);
+  const hasAct = !!(last && last.act && Object.keys(last.act).length);
+  $("netmsg").hidden = hasAct;
+  // hidden=true wenn Daten vorhanden sind (Nachricht ausblenden)
+  if (!hasAct) $("netmsg").textContent = "wartet auf Aktivierungsdaten";
+}
+
+async function tick() {
+  let connOk = true;
+  try {
+    const status = await fetchJSON("/api/status");
+    lastStatus = status;
+    setDot(status.state, true);
+    pushHostHistory(status);
+    await pollSeries();
+    renderAll(status);
+  } catch (e) {
+    connOk = false;
+    setDot(lastStatus ? lastStatus.state : "wartet", false);
+  }
+}
+
+let rt;
+addEventListener("resize", () => {
+  clearTimeout(rt);
+  rt = setTimeout(() => {
+    for (const id in specs) { const h = $(id); if (h) h.dataset.w = ""; }
+    if (lastStatus) renderAll(lastStatus); else emptyState();
+  }, 200);
+});
+
+emptyState();
+tick();
+setInterval(tick, 4000);
+</script>
+</body>
+</html>

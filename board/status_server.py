@@ -1,0 +1,793 @@
+#!/usr/bin/env python3
+"""Read-only Live-Status des OpenFront-BC-Trainings.
+
+Liest ausschliesslich aus <root>/train/metrics.jsonl und
+<root>/train/host.json (inkrementell, ressourcenschonend) und liefert:
+
+  GET /              statische Seite aus <root>/web/
+  GET /viz/...       statische Dateien aus <root>/web/viz/
+  GET /api/status    kompakter Gesamtzustand
+  GET /api/series?since=<step>  Zeitreihe fuer Diagramme
+
+Oeffentlich ohne Login erreichbar: niemals Pfade, Hostnamen, Benutzernamen,
+IP-Adressen oder Umgebungsvariablen in einer Antwort ausgeben.
+"""
+import argparse
+import getpass
+import json
+import mimetypes
+import os
+import re
+import shutil
+import sys
+import tempfile
+import threading
+import time
+import traceback
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, unquote, urlsplit
+
+DEFAULT_PORT = 8099
+DEFAULT_HOST = "127.0.0.1"
+
+MAX_SERIES = 4000
+MAX_VAL = 20
+MAX_SNAPS = 40
+STAT_INTERVAL = 2.0          # Sekunden zwischen os.stat-Aufrufen auf metrics.jsonl
+POOL_INTERVAL = 300.0        # Sekunden zwischen Datei-Zaehlungen in records/ und shards/
+LAEUFT_AGE = 180.0           # Sekunden: juengster step-Record aelter -> pause
+MAX_QUERY_LEN = 200
+
+COLS = ["step", "t", "loss", "acc", "sps", "gnorm", "vmse", "winfrac",
+        "lr", "ent", "top", "adv_p50", "adv_p90"]
+
+_GENERIC_ERROR = {"ok": False, "error": "nicht verfügbar"}
+
+
+def _avg(d, keys):
+    if not keys or not isinstance(d, dict):
+        return None
+    vals = [d[k] for k in keys if k in d and d[k] is not None]
+    if not vals:
+        return None
+    try:
+        return sum(float(v) for v in vals) / len(vals)
+    except (TypeError, ValueError):
+        return None
+
+
+class MetricsState:
+    """Haelt den inkrementell geparsten Zustand von metrics.jsonl + host.json."""
+
+    def __init__(self, root):
+        self.root = root
+        self.metrics_path = os.path.join(root, "train", "metrics.jsonl")
+        self.host_path = os.path.join(root, "train", "host.json")
+        self.records_dir = os.path.join(root, "records")
+        self.shards_dir = os.path.join(root, "shards")
+
+        self.lock = threading.Lock()
+
+        # Datei-Lesezustand
+        self._offset = 0
+        self._size = -1          # -1 = noch nie erfolgreich gelesen
+        self._mtime = -1.0
+        self._last_stat = 0.0
+        self._buf = b""          # unvollstaendige letzte Zeile
+
+        # geparster Inhalt
+        self.meta = None
+        self.run = None
+        self.last = None
+        self.val = []
+        self.snaps = []
+        self.saw_end = False
+        self.series = []
+        self._need_reset = False
+
+        # Beobachtungszaehler (nur intern / fuer Selbsttest)
+        self._parsed_lines = 0
+        self._bad_lines = 0
+
+        self._pool_cache = {"t": 0.0, "records": None, "shards": None}
+
+    # ---------------------------------------------------------- Pool ----
+
+    @staticmethod
+    def _count_dir(path):
+        try:
+            n = 0
+            with os.scandir(path) as it:
+                for entry in it:
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            n += 1
+                    except OSError:
+                        continue
+            return n
+        except OSError:
+            return None
+
+    def pool(self):
+        now = time.time()
+        with self.lock:
+            stale = (now - self._pool_cache["t"]) > POOL_INTERVAL
+            if stale or self._pool_cache["t"] == 0.0:
+                records = self._count_dir(self.records_dir)
+                shards = self._count_dir(self.shards_dir)
+                self._pool_cache = {"t": now, "records": records, "shards": shards}
+            return {"records": self._pool_cache["records"], "shards": self._pool_cache["shards"]}
+
+    # ---------------------------------------------------------- Host ----
+
+    def host(self):
+        try:
+            st = os.stat(self.host_path)
+        except OSError:
+            return None, None
+        try:
+            with open(self.host_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return None, None
+        except Exception:
+            return None, None
+        return data, time.time() - st.st_mtime
+
+    # ------------------------------------------------------- Metrics ----
+
+    def _reset_state_locked(self):
+        self._offset = 0
+        self._buf = b""
+        self.meta = None
+        self.run = None
+        self.last = None
+        self.val = []
+        self.snaps = []
+        self.saw_end = False
+        self.series = []
+        self._need_reset = True
+
+    def _ingest_locked(self, chunk):
+        data = self._buf + chunk
+        lines = data.split(b"\n")
+        self._buf = lines.pop()  # letzter Teil: leer oder unvollstaendig
+        for raw in lines:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except Exception:
+                self._bad_lines += 1
+                continue
+            if not isinstance(rec, dict):
+                self._bad_lines += 1
+                continue
+            self._parsed_lines += 1
+            self._handle_record_locked(rec)
+
+    def _handle_record_locked(self, rec):
+        run = rec.get("run")
+        if run is not None and self.run is not None and run != self.run:
+            # Lauf hat innerhalb desselben Anhangs gewechselt (ohne Groessensprung)
+            self._reset_state_locked()
+        if run is not None:
+            self.run = run
+
+        kind = rec.get("kind")
+        if kind == "start":
+            m = dict(rec)
+            m.pop("kind", None)
+            self.meta = m
+        elif kind == "step":
+            self.last = rec
+            row = self._make_row_locked(rec)
+            if row is not None:
+                self.series.append(row)
+                self._maybe_decimate_locked()
+        elif kind == "val":
+            self.val.append(rec)
+            if len(self.val) > MAX_VAL:
+                self.val = self.val[-MAX_VAL:]
+        elif kind == "snap":
+            self.snaps.append(rec)
+            if len(self.snaps) > MAX_SNAPS:
+                self.snaps = self.snaps[-MAX_SNAPS:]
+        elif kind == "end":
+            self.saw_end = True
+
+    def _make_row_locked(self, rec):
+        core = []
+        if isinstance(self.meta, dict):
+            core = self.meta.get("core_heads") or []
+        hen = rec.get("hen") or {}
+        htop = rec.get("htop") or {}
+        adv = rec.get("adv") or {}
+        try:
+            return [
+                rec.get("step"), rec.get("t"), rec.get("loss"), rec.get("acc"),
+                rec.get("sps"), rec.get("gnorm"), rec.get("vmse"), rec.get("winfrac"),
+                rec.get("lr"), _avg(hen, core), _avg(htop, core),
+                adv.get("p50") if isinstance(adv, dict) else None,
+                adv.get("p90") if isinstance(adv, dict) else None,
+            ]
+        except Exception:
+            return None
+
+    def _maybe_decimate_locked(self):
+        if len(self.series) <= MAX_SERIES:
+            return
+        n = len(self.series)
+        half = n // 2
+        old = self.series[:half]
+        new = self.series[half:]
+        self.series = old[::2] + new
+        self._need_reset = True
+
+    def maybe_refresh(self):
+        now = time.time()
+        with self.lock:
+            if self._last_stat != 0.0 and (now - self._last_stat) < STAT_INTERVAL:
+                return
+            self._last_stat = now
+
+        try:
+            st = os.stat(self.metrics_path)
+        except OSError:
+            with self.lock:
+                if self._size != -1:
+                    self._reset_state_locked()
+                    self._size = -1
+                    self._mtime = -1.0
+            return
+
+        size = st.st_size
+        mtime = st.st_mtime
+
+        with self.lock:
+            try:
+                if self._size == -1:
+                    self._offset = 0
+                    self._buf = b""
+                elif size < self._offset or mtime + 1e-6 < self._mtime:
+                    self._reset_state_locked()
+
+                if size == self._offset:
+                    self._size = size
+                    self._mtime = mtime
+                    return
+
+                try:
+                    with open(self.metrics_path, "rb") as f:
+                        f.seek(self._offset)
+                        chunk = f.read(size - self._offset)
+                except OSError:
+                    return
+
+                self._ingest_locked(chunk)
+                self._offset = size
+                self._size = size
+                self._mtime = mtime
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+
+    # ------------------------------------------------------- API-Daten -
+
+    def status(self):
+        try:
+            self.maybe_refresh()
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+
+        now = time.time()
+        with self.lock:
+            meta = self.meta
+            last = self.last
+            val = list(self.val)
+            snaps = list(self.snaps)
+            saw_end = self.saw_end
+            series_len = len(self.series)
+
+        if meta is None or last is None:
+            state = "wartet"
+            age = None
+        else:
+            try:
+                age = now - float(last.get("t", now))
+            except (TypeError, ValueError):
+                age = None
+            if saw_end:
+                state = "beendet"
+            elif age is not None and age < LAEUFT_AGE:
+                state = "laeuft"
+            else:
+                state = "pause"
+
+        try:
+            host_data, host_age = self.host()
+        except Exception:
+            host_data, host_age = None, None
+
+        try:
+            pool = self.pool()
+        except Exception:
+            pool = {"records": None, "shards": None}
+
+        runtime = None
+        if isinstance(meta, dict) and "t" in meta:
+            try:
+                runtime = now - float(meta["t"])
+            except (TypeError, ValueError):
+                runtime = None
+
+        return {
+            "ok": True,
+            "now": round(now, 1),
+            "state": state,
+            "meta": meta,
+            "last": last,
+            "age": round(age, 1) if age is not None else None,
+            "val": val,
+            "snaps": snaps,
+            "host": host_data,
+            "host_age": round(host_age, 1) if host_age is not None else None,
+            "pool": pool,
+            "series_len": series_len,
+            "runtime": round(runtime, 1) if runtime is not None else None,
+        }
+
+    def series_response(self, since):
+        try:
+            self.maybe_refresh()
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+
+        with self.lock:
+            need_reset = self._need_reset
+            self._need_reset = False
+            run = self.run
+            rows_all = self.series
+            if since is None or need_reset:
+                rows = list(rows_all)
+                reset = True
+            else:
+                rows = [r for r in rows_all if r[0] is not None and r[0] > since]
+                reset = False
+
+        return {"reset": reset, "run": run, "cols": COLS, "rows": rows}
+
+
+# ------------------------------------------------------------- HTTP ----
+
+def make_handler(state, web_dir):
+    web_real = os.path.realpath(web_dir)
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "of-status/1"
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a, **kw):
+            pass
+
+        def log_error(self, *a, **kw):
+            pass
+
+        # -- gemeinsame Ausgabe-Helfer --
+
+        def _base_headers(self):
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'",
+            )
+            self.send_header("X-Robots-Tag", "noindex")
+
+        def _send_json(self, code, obj, is_head=False, no_store=True):
+            try:
+                body = json.dumps(obj).encode("utf-8")
+            except Exception:
+                body = b'{"ok":false,"error":"nicht verf\\u00fcgbar"}'
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            if no_store:
+                self.send_header("Cache-Control", "no-store")
+            self._base_headers()
+            self.end_headers()
+            if not is_head:
+                try:
+                    self.wfile.write(body)
+                except Exception:
+                    pass
+
+        def _send_text_error(self, code, msg, is_head=False):
+            body = msg.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self._base_headers()
+            self.end_headers()
+            if not is_head:
+                try:
+                    self.wfile.write(body)
+                except Exception:
+                    pass
+
+        # -- Methoden --
+
+        def do_GET(self):
+            self._route(is_head=False)
+
+        def do_HEAD(self):
+            self._route(is_head=True)
+
+        def _method_not_allowed(self):
+            self._send_json(405, {"ok": False, "error": "nicht erlaubt"})
+
+        def do_POST(self):
+            self._method_not_allowed()
+
+        def do_PUT(self):
+            self._method_not_allowed()
+
+        def do_DELETE(self):
+            self._method_not_allowed()
+
+        def do_PATCH(self):
+            self._method_not_allowed()
+
+        def do_OPTIONS(self):
+            self._method_not_allowed()
+
+        # -- Routing --
+
+        def _route(self, is_head):
+            try:
+                parsed = urlsplit(self.path)
+                path = parsed.path
+                if len(parsed.query) > MAX_QUERY_LEN:
+                    self._send_json(400, {"ok": False, "error": "ungültige Anfrage"}, is_head)
+                    return
+
+                if path == "/api/status":
+                    self._send_json(200, state.status(), is_head)
+                    return
+
+                if path == "/api/series":
+                    qs = parse_qs(parsed.query, keep_blank_values=True)
+                    raw = qs.get("since", [None])[0]
+                    since = None
+                    if raw is not None and raw != "":
+                        if not re.fullmatch(r"-?\d{1,15}", raw):
+                            self._send_json(400, {"ok": False, "error": "ungültige Anfrage"}, is_head)
+                            return
+                        since = int(raw)
+                    self._send_json(200, state.series_response(since), is_head)
+                    return
+
+                self._serve_static(path, is_head)
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+                try:
+                    self._send_json(500, dict(_GENERIC_ERROR), is_head)
+                except Exception:
+                    pass
+
+        def _serve_static(self, path, is_head):
+            rel = unquote(path).lstrip("/")
+            if not rel:
+                rel = "index.html"
+            norm = os.path.normpath(rel)
+            if norm in (".", ""):
+                norm = "index.html"
+            if norm.startswith("..") or os.path.isabs(norm):
+                self._send_text_error(404, "nicht gefunden", is_head)
+                return
+
+            full = os.path.join(web_dir, norm)
+            try:
+                real_full = os.path.realpath(full)
+            except OSError:
+                self._send_text_error(404, "nicht gefunden", is_head)
+                return
+
+            if real_full != web_real and not real_full.startswith(web_real + os.sep):
+                self._send_text_error(404, "nicht gefunden", is_head)
+                return
+
+            if not os.path.isfile(real_full):
+                self._send_text_error(404, "nicht gefunden", is_head)
+                return
+
+            try:
+                with open(real_full, "rb") as f:
+                    data = f.read()
+            except OSError:
+                self._send_text_error(404, "nicht gefunden", is_head)
+                return
+
+            ctype, _ = mimetypes.guess_type(real_full)
+            ctype = ctype or "application/octet-stream"
+
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            if os.path.basename(real_full) == "index.html":
+                self.send_header("Cache-Control", "no-cache")
+            else:
+                self.send_header("Cache-Control", "max-age=60")
+            self._base_headers()
+            self.end_headers()
+            if not is_head:
+                try:
+                    self.wfile.write(data)
+                except Exception:
+                    pass
+
+    return Handler
+
+
+# --------------------------------------------------------------- CLI ---
+
+def resolve_root(cli_root):
+    if cli_root:
+        return cli_root
+    env_root = os.environ.get("OF_ROOT")
+    if env_root:
+        return env_root
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def run_server(root, host, port):
+    web_dir = os.path.join(root, "web")
+    state = MetricsState(root)
+    handler_cls = make_handler(state, web_dir)
+    httpd = ThreadingHTTPServer((host, port), handler_cls)
+    httpd.daemon_threads = True
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+
+
+# ---------------------------------------------------------- Selbsttest -
+
+def _http_get(base, path, method="GET"):
+    req = urllib.request.Request(base + path, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def run_self_tests():
+    ok = True
+
+    def check(name, cond):
+        nonlocal ok
+        print(("[OK]   " if cond else "[FAIL] ") + name)
+        if not cond:
+            ok = False
+        return cond
+
+    tmp = tempfile.mkdtemp(prefix="ofst_")
+    try:
+        # --- 1: leerer Zustand ---
+        state = MetricsState(tmp)
+        st1 = state.status()
+        check("1 leerer Zustand -> wartet, ok=true, kein Absturz",
+              st1["ok"] is True and st1["state"] == "wartet"
+              and st1["meta"] is None and st1["last"] is None)
+
+        train_dir = os.path.join(tmp, "train")
+        os.makedirs(train_dir, exist_ok=True)
+        metrics_path = os.path.join(train_dir, "metrics.jsonl")
+
+        run1 = "20260101-000000"
+        start_rec = {"run": run1, "t": 1000.0, "kind": "start",
+                     "core_heads": ["atype", "target"], "heads": ["atype", "target"]}
+        step_recs = [
+            {"run": run1, "t": 1000.0, "kind": "step", "step": 10, "loss": 1.2, "acc": 0.4,
+             "sps": 90.0, "gnorm": 1.1, "vmse": 0.2, "winfrac": 0.35, "lr": 0.001,
+             "hen": {"atype": 0.3, "target": 0.5}, "htop": {"atype": 0.4, "target": 0.4},
+             "adv": {"p50": 0.8, "p90": 1.4}},
+            {"run": run1, "t": 1001.0, "kind": "step", "step": 20, "loss": 1.1, "acc": 0.45,
+             "sps": 95.0, "gnorm": 1.05, "vmse": 0.18, "winfrac": 0.38, "lr": 0.001,
+             "hen": {"atype": 0.35, "target": 0.55}, "htop": {"atype": 0.35, "target": 0.45},
+             "adv": {"p50": 0.85, "p90": 1.45}},
+            # letzter step: bewusst runde Zahlen -> ent=0.6, top=0.4
+            {"run": run1, "t": 1002.0, "kind": "step", "step": 30, "loss": 1.0, "acc": 0.5,
+             "sps": 100.0, "gnorm": 1.0, "vmse": 0.15, "winfrac": 0.4, "lr": 0.001,
+             "hen": {"atype": 0.4, "target": 0.8}, "htop": {"atype": 0.2, "target": 0.6},
+             "adv": {"p50": 0.9, "p90": 1.5}},
+        ]
+        val_rec = {"run": run1, "t": 1003.0, "kind": "val", "ep": 0, "step": 30,
+                    "vloss": 1.1, "vacc": 0.4}
+        snap_rec = {"run": run1, "t": 1003.5, "kind": "snap", "ep": 0, "step": 30,
+                     "name": "m.pt", "mb": 1.0}
+
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            for r in [start_rec] + step_recs + [val_rec, snap_rec]:
+                f.write(json.dumps(r) + "\n")
+
+        state2 = MetricsState(tmp)
+        st2 = state2.status()
+        exp_ent = (0.4 + 0.8) / 2.0   # = 0.6, von Hand aus hen des letzten step
+        exp_top = (0.2 + 0.6) / 2.0   # = 0.4, von Hand aus htop des letzten step
+        last_row = state2.series[-1] if state2.series else None
+        check(
+            "2 Normalfall: meta/last/val/snaps + series-Laenge + ent/top korrekt",
+            st2["state"] == "pause"  # t=1002.0 liegt weit in der Vergangenheit -> nicht "laeuft"
+            and st2["meta"] is not None and st2["meta"]["run"] == run1
+            and st2["last"]["step"] == 30
+            and len(st2["val"]) == 1 and len(st2["snaps"]) == 1
+            and st2["series_len"] == 3
+            and last_row is not None
+            and abs(last_row[COLS.index("ent")] - exp_ent) < 1e-9
+            and abs(last_row[COLS.index("top")] - exp_top) < 1e-9,
+        )
+
+        # --- 3: Anhaengen im Betrieb ---
+        before_parsed = state2._parsed_lines
+        new_step = {"run": run1, "t": 1010.0, "kind": "step", "step": 40, "loss": 0.9,
+                    "acc": 0.55, "sps": 110.0, "gnorm": 0.9, "vmse": 0.09, "winfrac": 0.45,
+                    "lr": 0.001, "hen": {"atype": 0.5, "target": 0.5},
+                    "htop": {"atype": 0.25, "target": 0.55}, "adv": {"p50": 0.95, "p90": 1.6}}
+        with open(metrics_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(new_step) + "\n")
+        state2._last_stat = 0.0
+        state2.status()
+        delta = state2._parsed_lines - before_parsed
+        since_resp = state2.series_response(30)
+        check(
+            "3 nur neue Zeile geparst + since liefert genau die neuen",
+            delta == 1 and len(since_resp["rows"]) == 1 and since_resp["rows"][0][0] == 40,
+        )
+
+        # --- 4: halbe Zeile ---
+        with open(metrics_path, "a", encoding="utf-8") as f:
+            f.write('{"run":"%s","t":1011.0,"kind":"step","step":50' % run1)
+        state2._last_stat = 0.0
+        before_half = state2._parsed_lines
+        state2.status()
+        half_ignored = (state2._parsed_lines == before_half and state2.last.get("step") == 40)
+        with open(metrics_path, "a", encoding="utf-8") as f:
+            f.write(',"loss":0.8,"acc":0.6,"sps":120.0,"gnorm":0.8,"vmse":0.08,'
+                     '"winfrac":0.5,"lr":0.001,"hen":{"atype":0.5},"htop":{"atype":0.2},'
+                     '"adv":{"p50":0.9,"p90":1.5}}\n')
+        state2._last_stat = 0.0
+        state2.status()
+        check("4 halbe Zeile ignoriert, Rest kommt vollstaendig an",
+              half_ignored and state2.last.get("step") == 50)
+
+        # --- 6: kaputte Zeile ---
+        before_bad = state2._bad_lines
+        with open(metrics_path, "a", encoding="utf-8") as f:
+            f.write("{kaputt\n")
+            f.write(json.dumps({"run": run1, "t": 1012.0, "kind": "step", "step": 60,
+                                 "loss": 0.7, "acc": 0.65, "sps": 130.0, "gnorm": 0.7,
+                                 "vmse": 0.07, "winfrac": 0.55, "lr": 0.001,
+                                 "hen": {"atype": 0.5}, "htop": {"atype": 0.2},
+                                 "adv": {"p50": 0.9, "p90": 1.5}}) + "\n")
+        state2._last_stat = 0.0
+        state2.status()
+        check("6 kaputte Zeile uebersprungen, Rest kommt an",
+              state2._bad_lines == before_bad + 1 and state2.last.get("step") == 60)
+
+        # --- 5: Rotation ---
+        run2 = "20260102-000000"
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"run": run2, "t": 2000.0, "kind": "start",
+                                 "core_heads": ["atype"]}) + "\n")
+            f.write(json.dumps({"run": run2, "t": 2001.0, "kind": "step", "step": 5,
+                                 "loss": 2.0, "acc": 0.1, "sps": 50.0, "gnorm": 2.0,
+                                 "vmse": 0.5, "winfrac": 0.2, "lr": 0.001,
+                                 "hen": {"atype": 0.9}, "htop": {"atype": 0.9},
+                                 "adv": {"p50": 0.5, "p90": 1.0}}) + "\n")
+        state2._last_stat = 0.0
+        resp5 = state2.series_response(None)
+        st5 = state2.status()
+        check("5 Rotation: reset + neuer run erkannt",
+              resp5["reset"] is True and st5["meta"]["run"] == run2
+              and st5["series_len"] == 1)
+
+        # --- 10: Ausduennen ---
+        lines = []
+        for i in range(1, 4600):
+            lines.append(json.dumps({
+                "run": run2, "t": 2001.0 + i, "kind": "step", "step": 5 + i,
+                "loss": 1.0, "acc": 0.5, "sps": 100.0, "gnorm": 1.0, "vmse": 0.1,
+                "winfrac": 0.4, "lr": 0.001, "hen": {"atype": 0.5}, "htop": {"atype": 0.5},
+                "adv": {"p50": 0.9, "p90": 1.5},
+            }) + "\n")
+        with open(metrics_path, "a", encoding="utf-8") as f:
+            f.writelines(lines)
+        state2._last_stat = 0.0
+        state2.status()
+        capped = len(state2.series) <= MAX_SERIES
+        resp10 = state2.series_response(0)
+        check("10 Serie gedeckelt + reset-Flag nach Ausduennen",
+              capped and resp10["reset"] is True)
+
+        # --- HTTP-Ebene: 7 Pfad-Ausbruch, 8 Methoden, 9 kaputtes since, 11 kein Leck ---
+        web_dir = os.path.join(tmp, "web")
+        os.makedirs(web_dir, exist_ok=True)
+        with open(os.path.join(web_dir, "index.html"), "w", encoding="utf-8") as f:
+            f.write("<html>ok</html>")
+        with open(os.path.join(tmp, "secret_outside.txt"), "w", encoding="utf-8") as f:
+            f.write("SHOULD_NOT_LEAK")
+
+        http_state = MetricsState(tmp)
+        handler_cls = make_handler(http_state, web_dir)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+        httpd.daemon_threads = True
+        port = httpd.server_address[1]
+        th = threading.Thread(target=httpd.serve_forever, daemon=True)
+        th.start()
+        try:
+            base = "http://127.0.0.1:%d" % port
+
+            traversal_ok = True
+            for p in ["/../status_server.py", "/%2e%2e/%2e%2e/etc/passwd",
+                      "/viz/../../status_server.py", "/../secret_outside.txt",
+                      "/%2e%2e/secret_outside.txt"]:
+                code, body = _http_get(base, p)
+                leaked = b"SHOULD_NOT_LEAK" in body or b"#!/usr/bin/env" in body
+                if code not in (403, 404) or leaked:
+                    traversal_ok = False
+            check("7 Pfad-Ausbruch blockiert (403/404, kein Inhalt)", traversal_ok)
+
+            code, _ = _http_get(base, "/", method="POST")
+            check("8 POST -> 405", code == 405)
+
+            code, _ = _http_get(base, "/api/series?since=abc")
+            check("9 since kaputt -> 400", code == 400)
+
+            all_bodies = []
+            for p, m in [("/api/status", "GET"), ("/api/series", "GET"),
+                         ("/api/series?since=xx", "GET"), ("/nope", "GET"),
+                         ("/../etc/passwd", "GET"), ("/", "POST")]:
+                c, b = _http_get(base, p, method=m)
+                all_bodies.append(b)
+            user = getpass.getuser()
+            leak_pat = re.compile(
+                r"/home/|/Users/|netter|apollo|100\.\d{1,3}\.\d{1,3}\.\d{1,3}|" + re.escape(user)
+            )
+            leaked_any = any(leak_pat.search(b.decode("utf-8", "replace")) for b in all_bodies)
+            check("11 kein Pfad-/Host-/Nutzerleck in Antworten", not leaked_any)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print("ERGEBNIS: %s" % ("bestanden" if ok else "FEHLGESCHLAGEN"))
+    return ok
+
+
+def main():
+    p = argparse.ArgumentParser(description="OpenFront-BC Live-Status-Server")
+    p.add_argument("--root", default=None)
+    p.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p.add_argument("--host", default=DEFAULT_HOST)
+    p.add_argument("--self-test", action="store_true")
+    args = p.parse_args()
+
+    if args.self_test:
+        sys.exit(0 if run_self_tests() else 1)
+
+    root = resolve_root(args.root)
+    run_server(root, args.host, args.port)
+
+
+if __name__ == "__main__":
+    main()
