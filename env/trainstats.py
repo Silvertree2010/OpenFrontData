@@ -78,9 +78,10 @@ class ActivationProbe:
             self._reduce(lid, output)
         return hook
 
+    @torch.no_grad()
     def _reduce(self, lid, x):
         try:
-            x = x.float()
+            x = x.detach().float()
             if lid == "opp":
                 # (B,N,emb) maskiert ueber gueltige Gegner mitteln
                 if self._opp_mask is not None:
@@ -220,10 +221,18 @@ def adv_stats(win: torch.Tensor) -> dict:
 
 
 # ------------------------------------------------------------- Gradienten
+@torch.no_grad()
 def grad_norm(params) -> float:
-    """Globale L2-Norm der Gradienten, ohne die Gradienten zu veraendern."""
-    n = torch.nn.utils.clip_grad_norm_(list(params), max_norm=float("inf"))
-    return float(n.item()) if torch.is_tensor(n) else float(n)
+    """Globale L2-Norm der Gradienten, garantiert ohne Nebenwirkung.
+
+    NICHT ueber clip_grad_norm_(max_norm=inf): bei einem einzigen inf/nan-
+    Gradienten wird dort clip_coef = inf/inf = nan und ALLE Gradienten werden
+    mit nan multipliziert — der folgende opt.step() wuerde das ganze Netz
+    stillschweigend zerstoeren. Hier wird nur gelesen."""
+    norms = [p.grad.detach().float().norm(2) for p in params if p.grad is not None]
+    if not norms:
+        return 0.0
+    return float(torch.linalg.vector_norm(torch.stack(norms)).item())
 
 
 # ------------------------------------------------------------- Host-Probe

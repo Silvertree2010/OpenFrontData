@@ -340,6 +340,12 @@ def main():
                     except Exception as e:
                         print(f"[warn] Metrik-Instrumentierung deaktiviert (step): {e}", flush=True)
                         metrics_on = False
+                        try:            # Hooks abhaengen, sonst laufen sie armiert weiter
+                            if probe is not None:
+                                probe.remove()
+                            probe = None
+                        except Exception:
+                            pass
                 run_loss = 0.0; run_n = 0
             if gstep % a.ckpt_every == 0:
                 save_ckpt(a.ckpt, net, opt, epoch, gstep)
