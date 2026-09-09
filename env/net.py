@@ -31,7 +31,7 @@ import actions as AC
 # Formen der Beobachtung (aus obs.ts)
 NUM_MAP_CH = 18                  # = len(obs.CHANNELS); bei Kanal-Änderung mitziehen
 GH, GW = 90, 180                 # Kartenraster (Höhe, Breite) — passt zu COARSE_H/W
-from featurize import OWN_DIM, OPP_DIM   # Dims aus dem Featurizer (single source of truth)
+from featurize import OWN_DIM, OPP_DIM, CONFIG_DIM   # Dims aus dem Featurizer (single source of truth)
 MAX_OPP = AC.MAX_OPP             # 24
 
 EMB = 160                        # Einbettungsbreite (Gegner/Zeiger)
@@ -74,8 +74,22 @@ class OppEncoder(nn.Module):
         # opp: (B,N,d_in)  mask: (B,N) True = gültiger Gegner
         x = self.inp(opp)
         pad = ~mask                                   # True = ignorieren
+        # Zeilen ganz ohne gueltigen Gegner (mask komplett False) lassen den
+        # Nested-Tensor-Schnellpfad von TransformerEncoder in eval() mit
+        # "to_padded_tensor: at least one constituent tensor should have
+        # non-zero numel" abstuerzen, weil dort *jede* Position als Padding
+        # markiert waere. Wir geben dem Encoder fuer solche Zeilen eine
+        # entschaerfte Maske (eine Position als "gueltig" vorgetaeuscht);
+        # deren Encoder-Ausgabe ist fuer das Ergebnis irrelevant, denn unten
+        # wird mit der ORIGINALEN mask gewichtet (Gewicht 0 -> Beitrag 0) und
+        # der Zeiger-Kopf maskiert die Zeile ohnehin mit -1e9. Fuer alle
+        # anderen Zeilen aendert sich nichts (bitgleich).
+        empty = pad.all(dim=1)                         # (B,) keine gueltigen Gegner
+        if empty.any():
+            pad = pad.clone()
+            pad[empty, 0] = False
         x = self.enc(x, src_key_padding_mask=pad)     # (B,N,emb)
-        # maskierter Mittelwert als Zusammenfassung
+        # maskierter Mittelwert als Zusammenfassung (mit der ORIGINALEN mask)
         w = mask.float().unsqueeze(-1)
         summary = (x * w).sum(1) / w.sum(1).clamp(min=1)
         return x, summary
@@ -87,8 +101,9 @@ class Net(nn.Module):
         self.map = MapEncoder()
         self.opp = OppEncoder()
         self.own = nn.Sequential(nn.Linear(OWN_DIM, 128), nn.ReLU(inplace=True), nn.Linear(128, 128))
+        self.cfg = nn.Sequential(nn.Linear(CONFIG_DIM, 32), nn.ReLU(inplace=True))  # Spiel-Modifier
         self.core = nn.Sequential(
-            nn.Linear(320 + EMB + 128, CORE), nn.ReLU(inplace=True),
+            nn.Linear(320 + EMB + 128 + 32, CORE), nn.ReLU(inplace=True),
             nn.Linear(CORE, CORE), nn.ReLU(inplace=True),
         )
         H = AC.HEAD_SIZES
@@ -112,11 +127,14 @@ class Net(nn.Module):
         self.fine_head = nn.Sequential(
             nn.Linear(CORE + 128, 256), nn.ReLU(inplace=True), nn.Linear(256, AC.NUM_FINE))
 
-    def forward(self, map_t, own_t, opp_t, opp_mask, coarse_idx=None):
-        spatial, gmap = self.map(map_t)              # (B,128,90,180), (B,256)
+    def forward(self, map_t, own_t, opp_t, opp_mask, config_t=None, coarse_idx=None):
+        spatial, gmap = self.map(map_t)              # (B,128,90,180), (B,320)
         opp_emb, opp_sum = self.opp(opp_t, opp_mask) # (B,N,EMB), (B,EMB)
         own = self.own(own_t)                        # (B,128)
-        core = self.core(torch.cat([gmap, opp_sum, own], dim=1))  # (B,CORE)
+        if config_t is None:                         # Rueckwaertskompat: neutraler Modifier
+            config_t = map_t.new_zeros(map_t.shape[0], CONFIG_DIM)
+        cfg = self.cfg(config_t)                     # (B,32)
+        core = self.core(torch.cat([gmap, opp_sum, own, cfg], dim=1))  # (B,CORE)
 
         B = map_t.shape[0]
         out = {}
