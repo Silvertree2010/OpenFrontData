@@ -105,7 +105,7 @@ async function run(file: string, outdir: string) {
   const u8 = new Uint8Array(MAPLEN);
   const lenBuf = Buffer.allocUnsafe(4);
 
-  let samples = 0, scannedTick = -1, thinned = 0, noops = 0, noopChances = 0;
+  let samples = 0, scannedTick = -1, thinned = 0, noops = 0, noopChances = 0, noopFehler = 0;
   const t0 = performance.now();
   // Ausduennen: pro Spieler max 1 Angriff je THIN Ticks (Rest immer behalten).
   const THIN = Number(process.env.THIN ?? 30);
@@ -157,11 +157,11 @@ async function run(file: string, outdir: string) {
       // Gegner-Reihenfolge → PlayerIDs (Label-Ziele sind PlayerIDs); plus user/clan fuer Reputation
       const oppIds = v.opponents.map((o) => {
         const pl = game.playerBySmallID(o.id);
-        return pl.isPlayer() ? pl.id() : null;
+        return pl?.isPlayer() ? pl.id() : null;
       });
       const opps = v.opponents.map((o) => {
         const pl = game.playerBySmallID(o.id);
-        return { ...o, user: pl.isPlayer() ? pl.name() : null, clan: pl.isPlayer() ? pl.clanTag() : null };
+        return { ...o, user: pl?.isPlayer() ? pl.name() : null, clan: pl?.isPlayer() ? pl.clanTag() : null };
       });
       ctx = {
         mapW: W, mapH: H, troops: player.troops(), gold: Number(player.gold()),
@@ -171,13 +171,17 @@ async function run(file: string, outdir: string) {
       };
       ctxCache.set(cid, ctx); mapCache.set(cid, zblock);
     }
-    // meta-Zeile: alles fuer Label-encode (Python) + obs-Features
-    metaLines.push(JSON.stringify({ turn: turnNumber, clientID: cid,
+    // meta-Zeile: alles fuer Label-encode (Python) + obs-Features.
+    // Erst bauen, dann Karte schreiben, dann anhaengen: wirft irgendetwas dazwischen
+    // (Nichtstun-Samples fangen wir ab), bleiben meta und maps im Gleichschritt —
+    // sonst zeigt jeder Laengen-Praefix danach auf den falschen Block.
+    const line = JSON.stringify({ turn: turnNumber, clientID: cid,
       mapW: ctx.mapW, mapH: ctx.mapH, troops: ctx.troops, gold: ctx.gold,
       oppIds: ctx.oppIds, ownUnitIds: ctx.ownUnitIds, ownAttackIds: ctx.ownAttackIds,
-      own: ctx.own, opps: ctx.opps, intent, w, win: winners.has(cid) ? 1 : 0 }));
+      own: ctx.own, opps: ctx.opps, intent, w, win: winners.has(cid) ? 1 : 0 });
     lenBuf.writeUInt32LE(zblock!.length, 0);
     fs.writeSync(mapsFd, lenBuf); fs.writeSync(mapsFd, zblock!);
+    metaLines.push(line);
     samples++;
   };
 
@@ -215,8 +219,18 @@ async function run(file: string, outdir: string) {
         if (!cid || !humanClient.has(cid) || acted.has(cid) || disconnected.has(cid)) continue;
         noopChances++;
         if ((turn.turnNumber + phaseOf(cid)) % NOOP_EVERY !== 0) continue;
-        emit(player, cid, turn.turnNumber, NOOP_INTENT, NOOP_EVERY);
-        noops++;
+        // Nichtstun-Ticks fassen Zustaende an, die der alte Pfad nie beruehrt hat
+        // (Spieler ohne Grenze, halb abgeraeumte Gegner). Gemessen: ohne diesen
+        // Fang verlor die Abtastung 14 von 17 Partien KOMPLETT, die vorher liefen.
+        // Ein einzelnes Nichtstun-Sample ist es nicht wert, eine Partie zu kosten.
+        try {
+          emit(player, cid, turn.turnNumber, NOOP_INTENT, NOOP_EVERY);
+          noops++;
+        } catch (e: any) {
+          noopFehler++;
+          if (noopFehler === 1) console.error(`  no-op uebersprungen (${info.gameID} t${turn.turnNumber}): ${e?.message ?? e}`);
+          ctxCache.delete(cid); mapCache.delete(cid);
+        }
       }
     }
     runner.addTurn(turn);
@@ -242,7 +256,8 @@ async function run(file: string, outdir: string) {
   fs.writeFileSync(path.join(outdir, `${info.gameID}${SUFFIX}.meta.zst`), zstdCompressSync(Buffer.from(metaLines.join("\n"))));
 
   const mb = fs.statSync(mapsPath).size / 1e6;
-  console.log(`${info.gameID} ${info.config.gameMap}: ${samples} Samples (${noops} no-op von ${noopChances} Gelegenheiten), ` +
+  console.log(`${info.gameID} ${info.config.gameMap}: ${samples} Samples (${noops} no-op von ${noopChances} ` +
+    `Gelegenheiten, ${noopFehler} uebersprungen), ` +
     `maps ${mb.toFixed(1)} MB (${(mb * 1000 / Math.max(samples, 1)).toFixed(1)} KB/Sample, ${thinned} ausgeduennt), ` +
     `${((performance.now() - t0) / 1000).toFixed(0)}s`);
 }
@@ -264,7 +279,7 @@ async function main() {
     const gid = path.basename(f).replace(/\.json$/, "");
     if (istFertig(outdir, gid)) { skipped++; continue; }   // resume-fest (leere Shards zaehlen NICHT als fertig)
     try { await run(f, outdir); done++; }
-    catch (e: any) { console.error(`FEHLER ${gid}: ${e?.message ?? e}`); failed++; }
+    catch (e: any) { console.error(`FEHLER ${gid}: ${process.env.STACK === "1" ? (e?.stack ?? e) : (e?.message ?? e)}`); failed++; }
   }
   if (files.length > 1) console.log(`[fertig] ${done} materialisiert, ${skipped} übersprungen, ${failed} Fehler`);
 }

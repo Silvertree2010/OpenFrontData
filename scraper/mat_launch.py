@@ -72,10 +72,24 @@ def main():
 
     chunkdir = tempfile.mkdtemp(prefix="matchunks_")
     procs = []
-    # n = GESAMT-Container-Budget (≈ Kerne); pro Commit anteilig an Gruppengröße,
-    # damit alle Container etwa gleich lang laufen (kein Leerlauf im Tail).
-    for commit, paths in groups.items():
-        k = max(1, round(n * len(paths) / max(total, 1)))
+    # n ist eine harte OBERGRENZE, keine Richtgroesse: ein Container bedient genau
+    # einen Engine-Commit, und "mindestens einer je Commit" hat auf node-2 aus
+    # n=2 vier Container gemacht — auf einer 4-Kern-Kiste, die DNS ausliefert.
+    # Also: groesste Gruppen zuerst, jede bekommt 1, der Rest anteilig, Summe = n.
+    # Passen nicht alle Gruppen in n, bleiben die kleinsten fuer den naechsten
+    # Aufruf liegen (resume-fest; run_v2.sh ruft in der Schleife).
+    order = sorted(groups.items(), key=lambda kv: -len(kv[1]))[:n]
+    rest = sum(len(v) for _, v in order)
+    budget = {c: 1 for c, _ in order}
+    frei = n - len(order)
+    for c, paths in order:
+        budget[c] += int(frei * len(paths) / max(rest, 1))
+    if order:
+        budget[order[0][0]] += n - sum(budget.values())
+    if len(order) < len(groups):
+        print(f"[launch] {len(groups)-len(order)} kleine Commit-Gruppe(n) bleiben fuer den naechsten Aufruf", flush=True)
+    for commit, paths in order:
+        k = budget[commit]
         chunks = [[] for _ in range(k)]
         for i, p in enumerate(paths):
             rel = os.path.relpath(p, records_dir)
