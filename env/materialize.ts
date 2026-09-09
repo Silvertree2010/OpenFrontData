@@ -45,6 +45,21 @@ const GW = 180, GH = 90, MAPLEN = NUM_CHANNELS * GW * GH;
 // (dataset.py/list_games behandeln "<gid>.noop" wie ein eigenes Spiel).
 const SUFFIX = process.env.SUFFIX ?? (process.env.NOOP_ONLY === "1" ? ".noop" : "");
 
+// Wiederaufnahme: eine winzige .meta.zst ist KEIN fertiges Spiel. Genau daran
+// hat der Pool 7827 leere Shards behalten — sie existierten, also wurden sie bei
+// jedem Neustart uebersprungen. Ein leeres zstd-Frame ist ~13 Byte, ein Shard mit
+// auch nur einem Sample mehrere hundert. Schwelle konfigurierbar, damit der Test
+// das alte Verhalten (MIN_META=0) nachstellen kann.
+// Ein Spiel, das ehrlich 0 Samples ergibt, bekommt stattdessen eine <gid>.none-
+// Marke: fertig, aber leer — so wird es nicht bei jedem Resume neu gerechnet.
+const MIN_META = Number(process.env.MIN_META ?? 64);
+
+function istFertig(outdir: string, gid: string): boolean {
+  if (fs.existsSync(path.join(outdir, `${gid}${SUFFIX}.none`))) return true;
+  const m = path.join(outdir, `${gid}${SUFFIX}.meta.zst`);
+  return fs.existsSync(m) && fs.statSync(m).size >= MIN_META;
+}
+
 async function run(file: string, outdir: string) {
   console.debug = () => {};
 
@@ -215,6 +230,15 @@ async function run(file: string, outdir: string) {
     }
   }
   fs.closeSync(mapsFd);
+  if (samples === 0) {
+    // Nichts gefunden: keine Pseudo-Shard-Dateien hinterlassen, sondern eine
+    // ehrliche Marke. Sonst sieht der naechste Lauf "erledigt" und fragt nie nach.
+    try { fs.unlinkSync(mapsPath); } catch {}
+    fs.writeFileSync(path.join(outdir, `${info.gameID}${SUFFIX}.none`), "");
+    console.log(`${info.gameID} ${info.config.gameMap}: 0 Samples — als .none markiert ` +
+      `(${((performance.now() - t0) / 1000).toFixed(0)}s)`);
+    return;
+  }
   fs.writeFileSync(path.join(outdir, `${info.gameID}${SUFFIX}.meta.zst`), zstdCompressSync(Buffer.from(metaLines.join("\n"))));
 
   const mb = fs.statSync(mapsPath).size / 1e6;
@@ -238,7 +262,7 @@ async function main() {
   let done = 0, skipped = 0, failed = 0;
   for (const f of files) {
     const gid = path.basename(f).replace(/\.json$/, "");
-    if (fs.existsSync(path.join(outdir, `${gid}${SUFFIX}.meta.zst`))) { skipped++; continue; }  // resume-fest
+    if (istFertig(outdir, gid)) { skipped++; continue; }   // resume-fest (leere Shards zaehlen NICHT als fertig)
     try { await run(f, outdir); done++; }
     catch (e: any) { console.error(`FEHLER ${gid}: ${e?.message ?? e}`); failed++; }
   }

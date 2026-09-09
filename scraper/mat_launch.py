@@ -33,12 +33,22 @@ def main():
 
     # An die Container weiterzureichende Schalter (nur gesetzte).
     passthru = []
-    for k in ("NOOP_EVERY", "NOOP_ONLY", "NOOP_ALIGN", "THIN", "SUFFIX"):
+    for k in ("NOOP_EVERY", "NOOP_ONLY", "NOOP_ALIGN", "THIN", "SUFFIX", "MIN_META"):
         if os.environ.get(k):
             passthru += ["-e", f"{k}={os.environ[k]}"]
     # Ein Nur-Nichtstun-Lauf schreibt <gid>.noop.* (siehe materialize.ts) — die
     # Resume-Pruefung muss denselben Namen suchen, sonst laeuft alles doppelt.
     suffix = os.environ.get("SUFFIX", ".noop" if os.environ.get("NOOP_ONLY") == "1" else "")
+    # Fertig heisst: Marke <gid>.none ODER eine meta.zst mit echtem Inhalt. Eine
+    # winzige meta.zst ist ein abgebrochener/leerer Lauf und wird neu gemacht —
+    # sonst bleiben leere Shards fuer immer leer (siehe MIN_META in materialize.ts).
+    min_meta = int(os.environ.get("MIN_META", 64))
+
+    def fertig(gid):
+        if os.path.exists(os.path.join(out_dir, f"{gid}{suffix}.none")):
+            return True
+        m = os.path.join(out_dir, f"{gid}{suffix}.meta.zst")
+        return os.path.exists(m) and os.path.getsize(m) >= min_meta
     if passthru:
         print(f"[launch] Schalter: {' '.join(passthru[1::2])}, Suffix '{suffix}'", flush=True)
 
@@ -49,7 +59,7 @@ def main():
     skipped = 0
     for p in files:
         gid = os.path.basename(p)[:-5]
-        if os.path.exists(os.path.join(out_dir, f"{gid}{suffix}.meta.zst")):
+        if fertig(gid):
             skipped += 1; continue
         c = commit_of(p)
         if not c: continue
@@ -95,8 +105,11 @@ def main():
     for p in procs:
         p.wait()
     # zählen
-    done = len(glob.glob(os.path.join(out_dir, "*.meta.zst")))
-    print(f"[launch] fertig in {(time.time()-t0)/60:.1f} min. Shards im Ordner: {done}", flush=True)
+    done = len([p for p in glob.glob(os.path.join(out_dir, "*.meta.zst"))
+                if os.path.getsize(p) >= min_meta])
+    leer = len(glob.glob(os.path.join(out_dir, "*.none")))
+    print(f"[launch] fertig in {(time.time()-t0)/60:.1f} min. Shards im Ordner: {done}, "
+          f"leere Partien (.none): {leer}", flush=True)
 
 if __name__ == "__main__":
     main()
