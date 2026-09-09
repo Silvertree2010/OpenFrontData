@@ -74,8 +74,10 @@ class MetricsState:
         self._offset = 0
         self._size = -1          # -1 = noch nie erfolgreich gelesen
         self._mtime = -1.0
+        self._inode = None       # (st_dev, st_ino) der zuletzt gelesenen Datei
         self._last_stat = 0.0
         self._buf = b""          # unvollstaendige letzte Zeile
+        self._mid_ingest_reset = False  # Reset waehrend eines laufenden Ingests?
 
         # geparster Inhalt
         self.meta = None
@@ -149,6 +151,7 @@ class MetricsState:
         self.saw_end = False
         self.series = []
         self._need_reset = True
+        self._mid_ingest_reset = True
 
     def _ingest_locked(self, chunk):
         data = self._buf + chunk
@@ -171,13 +174,23 @@ class MetricsState:
 
     def _handle_record_locked(self, rec):
         run = rec.get("run")
+        kind = rec.get("kind")
         if run is not None and self.run is not None and run != self.run:
-            # Lauf hat innerhalb desselben Anhangs gewechselt (ohne Groessensprung)
-            self._reset_state_locked()
+            if kind == "start":
+                # Legitimer Laufwechsel: sauber zuruecksetzen, das start-
+                # Ereignis baut den Zustand im selben Aufruf wieder auf.
+                self._reset_state_locked()
+            else:
+                # Datensatz eines fremden Laufs OHNE eigenes start-Ereignis in
+                # diesem Fenster -- vermutlich Rest eines angerissenen
+                # Uebergangs (z.B. durch einen ueberlappenden/erneuerten
+                # Sync). Nicht den gueltigen Zustand des aktuellen Laufs
+                # verwerfen, nur den verwaisten Datensatz zurueckweisen.
+                self._bad_lines += 1
+                return
         if run is not None:
             self.run = run
 
-        kind = rec.get("kind")
         if kind == "start":
             m = dict(rec)
             m.pop("kind", None)
@@ -242,22 +255,39 @@ class MetricsState:
                     self._reset_state_locked()
                     self._size = -1
                     self._mtime = -1.0
+                    self._inode = None
             return
 
         size = st.st_size
         mtime = st.st_mtime
+        inode = (st.st_dev, st.st_ino)
 
         with self.lock:
             try:
-                if self._size == -1:
+                first_read = self._size == -1
+                # Ein Inode-Wechsel (z.B. rsync-artiger Ersatz: temp-Datei +
+                # os.replace) beweist, dass die Datei unter diesem Pfad NICHT
+                # mehr dieselbe ist, die self._offset referenziert -- der
+                # bisherige Offset ist dann fuer diese Datei bedeutungslos,
+                # selbst wenn Groesse/mtime "plausibel" weitergewachsen sind.
+                identity_changed = (
+                    not first_read and self._inode is not None and inode != self._inode
+                )
+                shrank_or_rewound = (
+                    not first_read
+                    and (size < self._offset or mtime + 1e-6 < self._mtime)
+                )
+
+                if first_read:
                     self._offset = 0
                     self._buf = b""
-                elif size < self._offset or mtime + 1e-6 < self._mtime:
+                elif identity_changed or shrank_or_rewound:
                     self._reset_state_locked()
 
                 if size == self._offset:
                     self._size = size
                     self._mtime = mtime
+                    self._inode = inode
                     return
 
                 try:
@@ -267,10 +297,30 @@ class MetricsState:
                 except OSError:
                     return
 
+                self._mid_ingest_reset = False
                 self._ingest_locked(chunk)
+                if self._mid_ingest_reset:
+                    # Waehrend dieses Chunks hat _handle_record_locked selbst
+                    # einen Reset ausgeloest (z.B. Lauf-Wechsel mitten in der
+                    # eingelesenen Zeilenmenge). Der bis dahin fortgeschriebene
+                    # Offset waere ab hier nicht mehr vertrauenswuerdig -- die
+                    # Datei deshalb komplett neu von vorn lesen, statt den
+                    # Offset einfach ans Dateiende zu springen.
+                    self._offset = 0
+                    self._buf = b""
+                    self._mid_ingest_reset = False
+                    try:
+                        with open(self.metrics_path, "rb") as f:
+                            full_chunk = f.read(size)
+                    except OSError:
+                        return
+                    self._ingest_locked(full_chunk)
+                    self._mid_ingest_reset = False
+
                 self._offset = size
                 self._size = size
                 self._mtime = mtime
+                self._inode = inode
             except Exception:
                 traceback.print_exc(file=sys.stderr)
 
@@ -685,6 +735,61 @@ def run_self_tests():
         state2.status()
         check("6 kaputte Zeile uebersprungen, Rest kommt an",
               state2._bad_lines == before_bad + 1 and state2.last.get("step") == 60)
+
+        # --- 12: rsync-artiger Austausch (neue Inode) darf meta nicht verlieren ---
+        rsync_dir = os.path.join(tmp, "rsync_root")
+        rsync_train = os.path.join(rsync_dir, "train")
+        os.makedirs(rsync_train, exist_ok=True)
+        rsync_metrics = os.path.join(rsync_train, "metrics.jsonl")
+        run_a = "20260909-103929"
+        now_t = time.time()
+        lines_a = [json.dumps({"run": run_a, "t": now_t, "kind": "start",
+                                "core_heads": ["atype"]})]
+        for i in range(3):
+            lines_a.append(json.dumps({
+                "run": run_a, "t": now_t + i, "kind": "step", "step": i,
+                "loss": 1.0, "acc": 0.5, "sps": 100.0, "gnorm": 1.0, "vmse": 0.1,
+                "winfrac": 0.4, "lr": 0.001, "hen": {"atype": 0.5}, "htop": {"atype": 0.5},
+                "adv": {"p50": 0.9, "p90": 1.5}}))
+        with open(rsync_metrics, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines_a) + "\n")
+
+        rsync_state = MetricsState(rsync_dir)
+        rsync_state.status()  # erster, vollstaendiger Read
+        meta_after_first_read = rsync_state.meta
+        ino_before = os.stat(rsync_metrics).st_ino
+
+        # rsync-artiger Ersatz: temp-Datei schreiben, dann atomar umbenennen
+        # (neue Inode). Enthaelt dieselben Zeilen plus weitere -- die neuen
+        # Zeilen gehoeren zu einem angerissenen Lauf-Uebergang (Steps eines
+        # neuen Laufs, dessen eigenes start-Ereignis bei diesem Austausch
+        # verlorenging), wie es ein ueberlappender/erneuerter rsync-Transfer
+        # verursachen kann.
+        run_b = "20260909-999999"
+        lines_b = list(lines_a)
+        for i in range(3, 6):
+            lines_b.append(json.dumps({
+                "run": run_b, "t": now_t + i, "kind": "step", "step": i,
+                "loss": 0.9, "acc": 0.55, "sps": 105.0, "gnorm": 0.9, "vmse": 0.08,
+                "winfrac": 0.45, "lr": 0.001, "hen": {"atype": 0.5}, "htop": {"atype": 0.5},
+                "adv": {"p50": 0.9, "p90": 1.5}}))
+        tmp_path = rsync_metrics + ".tmp_rsync"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines_b) + "\n")
+        os.replace(tmp_path, rsync_metrics)
+        ino_after = os.stat(rsync_metrics).st_ino
+
+        rsync_state._last_stat = 0.0
+        st12 = rsync_state.status()
+        check(
+            "12 Inode-Wechsel (rsync-artig): meta bleibt gesetzt, state bleibt laeuft",
+            ino_before != ino_after
+            and meta_after_first_read is not None
+            and st12["meta"] is not None
+            and st12["meta"]["run"] == run_a
+            and st12["last"]["run"] == run_a
+            and st12["state"] == "laeuft",
+        )
 
         # --- 5: Rotation ---
         run2 = "20260102-000000"
