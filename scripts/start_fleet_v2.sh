@@ -51,7 +51,11 @@ for i in 0 1 2; do
   if [ "$($S "netter@$H" 'ps -eo cmd | grep -c "[m]at_launch.py"')" -gt 0 ]; then
     echo "   ${NAME[$i]}: laeuft bereits, uebersprungen"; continue
   fi
-  $S "netter@$H" "cd ~/of-work && nohup setsid ./run_v2.sh ${NAME[$i]} ${CONTAINER[$i]} > /dev/null 2>&1 < /dev/null & sleep 3; echo ok" > /dev/null
+  # timeout: die Verbindung haengt, obwohl die Arbeit drueben laeuft — der
+  # abgesetzte Prozess gibt den Kanal nicht frei. Am 10.09.2026 blieb das
+  # Skript deshalb bei node-1 stehen und startete node-2/apollo nie.
+  # Die Arbeit ueberlebt das Kappen, auf allen drei Knoten geprueft.
+  timeout 25 $S "netter@$H" "cd ~/of-work && nohup setsid ./run_v2.sh ${NAME[$i]} ${CONTAINER[$i]} > /dev/null 2>&1 < /dev/null & sleep 3; echo ok" > /dev/null
   echo "   ${NAME[$i]}: ${CONTAINER[$i]} Container"
 done
 
