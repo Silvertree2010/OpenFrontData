@@ -1,0 +1,19 @@
+# Große/regenerierbare Daten — nie ins Repo
+data/
+.venv/
+vendor/
+node_modules
+logs/
+*.maps
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+viz/data/
+
+# Ausnahmen: klein und nicht wiederherstellbar
+!data/README.md
+!data/ultimus_rex/
+!data/ultimus_rex/*.py
+!data/ultimus_rex/*.md
+!data/reputation.json

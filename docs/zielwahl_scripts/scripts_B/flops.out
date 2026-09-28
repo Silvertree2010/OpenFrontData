@@ -1,0 +1,12 @@
+current Net: params 3.875 M, forward 7.239 GFLOP/sample (MapEncoder 7.201, of which stem@90x180 4.087)
+  coarse_head params 129, fine_head params 246080
+D0 spatial head: params 1.578 M, forward 3.298 GFLOP/sample, logits (1, 16200)
+V1 fine-crop stage: params 69.8 k, forward 51.86 MFLOP/sample, logits (1, 64)
+V2 candidate pointer K=128: params 309.2 k, forward 70.1 MFLOP/sample
+V2 candidate pointer K=256: params 309.2 k, forward 140.1 MFLOP/sample
+V2 candidate pointer K=512: params 309.2 k, forward 280.2 MFLOP/sample
+training cost ratio vs current (spatial head only on spatial sub-batch, share 25%): x1.11 -> if compute-bound: ~718 samples/s from 800
+training cost ratio vs current (spatial head only on spatial sub-batch, share 35%): x1.16 -> if compute-bound: ~690 samples/s from 800
+training cost ratio vs current (spatial head only on spatial sub-batch, share 45%): x1.21 -> if compute-bound: ~664 samples/s from 800
+training cost ratio if head ran on ALL samples: x1.46
+CPU wall (batch 32, 4 threads, fwd only): net 831 ms, D0 head 549 ms, ratio 0.66

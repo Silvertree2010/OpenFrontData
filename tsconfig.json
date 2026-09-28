@@ -1,0 +1,26 @@
+{
+  // Compileroptionen 1:1 von vendor/openfront/tsconfig.json gespiegelt.
+  // Abweichungen brechen die Simulation: useDefineForClassFields=false ist
+  // Pflicht, sonst laufen Klassenfeld-Initialisierer vor dem Konstruktor
+  // und Verhalten wie NationNukeBehavior stirbt beim ersten Tick.
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "paths": {
+      "resources/*": ["./vendor/openfront/resources/*"],
+      "src/*": ["./vendor/openfront/src/*"]
+    },
+    "sourceMap": true,
+    "allowUnusedLabels": false,
+    "experimentalDecorators": true,
+    "resolveJsonModule": true,
+    "strictNullChecks": true,
+    "useDefineForClassFields": false,
+    "strictPropertyInitialization": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "types": ["node"]
+  },
+  "include": ["env/**/*", "vendor/openfront/src/**/*", "vendor/openfront/resources/**/*"]
+}

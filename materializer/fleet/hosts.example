@@ -1,0 +1,36 @@
+# Flotten-Hostliste fuer launch.sh / status.sh / stop.sh.
+#
+# Format, durch Leerzeichen/Tabs getrennt, sechs Felder pro Zeile:
+#   name  ssh-ziel  records-pfad  ausgabe-pfad  cpu-deckel  build-modus
+#
+#   name          frei waehlbarer Bezeichner (nur fuer die Ausgabe der Skripte)
+#   ssh-ziel      wie in ~/.ssh/config, z.B. "arch" oder "apollo"
+#   records-pfad  Verzeichnis mit *.json-Records AUF DEM ZIELHOST (wird :ro nach /in gemountet)
+#   ausgabe-pfad  Verzeichnis AUF DEM ZIELHOST fuer die Ergebnisse (nach /out gemountet)
+#   cpu-deckel    Wert fuer `docker run --cpus`
+#   build-modus   "build" (Image auf dem Host selbst bauen) oder
+#                 "load"  (lokal bauen, per `docker save | ssh ... docker load` verteilen)
+#
+# Die Zeilenposition bestimmt den Shard: Zeile i von n Zeilen bekommt SHARD=i/n.
+# Kommentare (#) und Leerzeilen werden ignoriert. Kopiere diese Datei nach
+# hosts.local (oder aehnlich) und trage echte Hosts ein — hosts.example bleibt
+# ein Beispiel ohne aktive Zeilen.
+#
+# Flottenzwaenge (siehe feedback-homelab-fleet-constraints, DESIGN.md Kontext):
+#   - node-3l: NIE fuer Dauerlast eintragen.
+#   - Mac-Knoten wie "apollo-m2"/"M4": NIE — befristete Tailnet-Knoten des
+#     Nutzers, keine Rechenknoten fuer diese Flotte.
+#   - apollo: hoechstens die Haelfte seiner Kerne (12 Kerne -> cpu-deckel <= 6).
+#     Dienste laufen dort produktiv (Jellyfin, arr-Stack, ...) und duerfen nicht
+#     verhungern. Nur "load"-Modus verwenden, niemals dort bauen (Build ist
+#     kurzzeitig CPU-intensiv auf allen Kernen).
+#   - arch: Desktop des Nutzers. Niedriger cpu-deckel (launch.sh startet den
+#     Container zusaetzlich mit "nice"-Prioritaet des Docker-Daemons, das
+#     eigentliche Limit ist trotzdem --cpus hier).
+#   - node-1/node-2: duerfen laufen, aber nicht dauerfeuern (SSH nicht im
+#     Sekundentakt pollen — status.sh/launch.sh tun das ohnehin nur einmal).
+#
+# Beispiele, absichtlich auskommentiert:
+# arch     arch     ~/mat-pool/records         ~/mat-pool/out          3   build
+# apollo   apollo   /mnt/hdd/of-pool-records               ~/mat-test/out          6   load
+# node-1   node-1   ~/mat-pool/records-shard1   ~/mat-pool/out-shard1    2   load

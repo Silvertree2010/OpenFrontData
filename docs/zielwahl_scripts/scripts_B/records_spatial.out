@@ -1,0 +1,66 @@
+records: 65, unresolved maps: {}
+intents (excl. mark_disconnected): 286452
+  attack                181662  63.4%  in spawn phase: 555
+  build_unit             41851  14.6%  in spawn phase: 0
+  boat                   23721   8.3%  in spawn phase: 28
+  allianceRequest         9037   3.2%  in spawn phase: 8
+  spawn                   8194   2.9%  in spawn phase: 8194
+  donate_troops           7447   2.6%  in spawn phase: 0
+  upgrade_structure       6016   2.1%  in spawn phase: 0
+  allianceExtension       2684   0.9%  in spawn phase: 0
+  emoji                   1536   0.5%  in spawn phase: 2
+  move_warship            1410   0.5%  in spawn phase: 0
+  cancel_attack            605   0.2%  in spawn phase: 0
+  breakAlliance            598   0.2%  in spawn phase: 0
+  targetPlayer             363   0.1%  in spawn phase: 0
+  quick_chat               318   0.1%  in spawn phase: 0
+  cancel_boat              274   0.1%  in spawn phase: 0
+  allianceReject           236   0.1%  in spawn phase: 0
+  embargo                  173   0.1%  in spawn phase: 0
+  donate_gold              161   0.1%  in spawn phase: 0
+  embargo_all               89   0.0%  in spawn phase: 0
+  delete_unit               77   0.0%  in spawn phase: 0
+attack kept after THIN=30 (outside spawn phase): 83390/181662 = 45.9%
+spatial (build/boat/warship, outside spawn phase): 66954
+est. materialised samples (non-attack outside spawn + thinned attacks; ignores dead/non-human filter): 179948
+  -> spatial share of materialised samples ~ 37.2%
+spatial per game: median 884, mean 1030
+
+unit types (build_unit, outside spawn phase):
+  boat          -               23693  35.4% of spatial
+  build_unit    City            11303  16.9% of spatial
+  build_unit    Defense Post     7240  10.8% of spatial
+  build_unit    Port             5434   8.1% of spatial
+  build_unit    Warship          4667   7.0% of spatial
+  build_unit    Factory          4558   6.8% of spatial
+  build_unit    Atom Bomb        3595   5.4% of spatial
+  build_unit    SAM Launcher     2145   3.2% of spatial
+  build_unit    Missile Silo     1838   2.7% of spatial
+  move_warship  -                1410   2.1% of spatial
+  build_unit    Hydrogen Bomb    1015   1.5% of spatial
+  build_unit    MIRV               56   0.1% of spatial
+
+map sizes of spatial labels: tiles per coarse cell (W/180):
+  q10: 6.04 tiles/cell (W=1088)
+  q25: 8.67 tiles/cell (W=1560)
+  q50: 11.38 tiles/cell (W=2048)
+  q75: 13.78 tiles/cell (W=2480)
+  q90: 15.56 tiles/cell (W=2800)
+  share of spatial labels on maps with W<1440 (grid finer than map): 21.2%
+  share with W>1440: 78.8%;  aspect W/H median 1.15, range 0.50-15.00
+  cell anisotropy (cell_w/cell_h) median 0.58, q10 0.40, q90 1.00
+
+distance to own spawn tile (proxy for home region) and to previous same-type target, coarse cells:
+  ALL spatial            n= 62182  dist->spawn cells: med  13.0 q25   5.9 q75  29.8 | <=4c 15.6% <=8c 34.1% <=16c 56.5% | tiles med    158 || dist->prev same type cells: med   6.4, <=1c  9.3% <=4c 35.4% <=8c 57.2% (n=53385)
+  boat                   n= 22397  dist->spawn cells: med  18.4 q25   8.9 q75  36.4 | <=4c  7.0% <=8c 21.8% <=16c 44.9% | tiles med    213 || dist->prev same type cells: med   7.0, <=1c 11.8% <=4c 34.9% <=8c 54.1% (n=21694)
+  move_warship           n=  1324  dist->spawn cells: med  25.7 q25  12.1 q75  46.1 | <=4c  2.0% <=8c 13.3% <=16c 33.5% | tiles med    309 || dist->prev same type cells: med   6.4, <=1c 10.1% <=4c 36.3% <=8c 57.2% (n=1064)
+  build Atom Bomb        n=  3383  dist->spawn cells: med  56.0 q25  30.0 q75  93.2 | <=4c  1.0% <=8c  3.1% <=16c  9.7% | tiles med    701 || dist->prev same type cells: med   9.7, <=1c 23.6% <=4c 32.3% <=8c 45.5% (n=2903)
+  build City             n= 10357  dist->spawn cells: med   6.5 q25   3.3 q75  12.8 | <=4c 31.3% <=8c 58.0% <=16c 81.1% | tiles med     83 || dist->prev same type cells: med   4.9, <=1c  4.1% <=4c 42.4% <=8c 68.8% (n=9140)
+  build Defense Post     n=  6388  dist->spawn cells: med  11.3 q25   5.5 q75  22.2 | <=4c 17.0% <=8c 37.5% <=16c 63.8% | tiles med    144 || dist->prev same type cells: med   5.4, <=1c  2.5% <=4c 35.4% <=8c 65.5% (n=5793)
+  build Factory          n=  4241  dist->spawn cells: med   7.1 q25   3.7 q75  13.3 | <=4c 27.4% <=8c 54.7% <=16c 80.7% | tiles med     91 || dist->prev same type cells: med   8.1, <=1c  1.5% <=4c 22.0% <=8c 49.4% (n=2850)
+  build Hydrogen Bomb    n=   926  dist->spawn cells: med  54.8 q25  32.9 q75  88.6 | <=4c  0.1% <=8c  1.1% <=16c  6.9% | tiles med    739 || dist->prev same type cells: med  23.7, <=1c  6.2% <=4c  9.0% <=8c 13.8% (n=644)
+  build MIRV             n=    55  dist->spawn cells: med  44.0 q25  32.9 q75  68.8 | <=4c  0.0% <=8c  0.0% <=16c  5.5% | tiles med    609 || dist->prev same type cells: med  57.7, <=1c  7.1% <=4c  7.1% <=8c 14.3% (n=14)
+  build Missile Silo     n=  1743  dist->spawn cells: med   9.2 q25   4.4 q75  19.0 | <=4c 22.4% <=8c 44.0% <=16c 69.5% | tiles med    114 || dist->prev same type cells: med  10.9, <=1c  4.1% <=4c 20.5% <=8c 38.5% (n=834)
+  build Port             n=  5092  dist->spawn cells: med   7.9 q25   4.0 q75  16.8 | <=4c 24.7% <=8c 50.2% <=16c 73.6% | tiles med     98 || dist->prev same type cells: med   6.6, <=1c  3.7% <=4c 33.4% <=8c 56.8% (n=3726)
+  build SAM Launcher     n=  2035  dist->spawn cells: med   6.6 q25   3.2 q75  13.6 | <=4c 32.3% <=8c 56.6% <=16c 79.9% | tiles med     83 || dist->prev same type cells: med   7.9, <=1c  6.4% <=4c 25.0% <=8c 50.8% (n=1122)
+  build Warship          n=  4241  dist->spawn cells: med  20.2 q25   9.7 q75  36.5 | <=4c  6.3% <=8c 19.5% <=16c 41.4% | tiles med    247 || dist->prev same type cells: med   4.6, <=1c 22.0% <=4c 46.7% <=8c 62.8% (n=3601)

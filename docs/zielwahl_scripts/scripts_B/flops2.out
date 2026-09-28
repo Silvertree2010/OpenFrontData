@@ -1,0 +1,5 @@
+180x90 today-stem      encoder   7.31 GFLOP (1.53 M)  D0 head  3.30 GFLOP (1.58 M, 16200 logits)  train-cost ratio vs today (head on 37% spatial): x1.18
+144x144 today-stem     encoder   9.29 GFLOP (1.53 M)  D0 head  4.17 GFLOP (1.58 M, 20736 logits)  train-cost ratio vs today (head on 37% spatial): x1.50
+144x144 slim-stem      encoder   6.16 GFLOP (1.42 M)  D0 head  4.09 GFLOP (1.58 M, 20736 logits)  train-cost ratio vs today (head on 37% spatial): x1.07
+180x180 today-stem     encoder  14.55 GFLOP (1.53 M)  D0 head  6.53 GFLOP (1.58 M, 32400 logits)  train-cost ratio vs today (head on 37% spatial): x2.35
+V2 288x288 output layer: +0.93 GFLOP/sample, 18.0 k params, 82944 logits

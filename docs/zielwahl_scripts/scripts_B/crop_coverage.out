@@ -1,0 +1,15 @@
+type                n  R<= 32  R<= 64  R<=128  R<=256  R<=512   (crop side = 2R tiles, Chebyshev)
+ALL             62210    9.2%   23.6%   46.5%   68.7%   86.4%   median   142 tiles
+structures      29856   15.8%   37.0%   65.0%   85.0%   95.4%   median    88 tiles
+Boat            22425    3.8%   13.4%   34.7%   61.1%   84.7%   median   192 tiles
+nukes            4364    0.5%    1.2%    4.1%   15.2%   38.5%   median   633 tiles
+Warship          4241    2.9%   12.2%   30.3%   56.1%   83.0%   median   221 tiles
+MoveWarship      1324    0.8%    6.4%   20.5%   46.0%   79.0%   median   278 tiles
+City            10357   19.4%   43.3%   72.5%   89.1%   97.2%   median    75 tiles
+Defense Post     6388    9.4%   24.3%   49.8%   76.3%   91.5%   median   130 tiles
+Port             5092   14.7%   36.6%   64.5%   83.9%   94.7%   median    89 tiles
+Factory          4241   16.4%   39.1%   69.9%   89.3%   97.5%   median    82 tiles
+SAM Launcher     2035   21.2%   44.5%   70.7%   87.8%   96.9%   median    75 tiles
+Missile Silo     1743   12.9%   32.4%   59.3%   81.5%   94.3%   median   103 tiles
+Atom Bomb        3383    0.7%    1.4%    4.8%   15.8%   39.0%   median   628 tiles
+Hydrogen Bomb     926    0.1%    0.3%    1.7%   13.0%   36.2%   median   651 tiles

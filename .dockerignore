@@ -1,0 +1,18 @@
+# Nur fuer den Materialisierer-Build relevant sind materializer/, env/ und
+# tsconfig.json (siehe materializer/docker/Dockerfile). Alles andere bläht den
+# Build-Kontext unnötig auf (data/ allein > mehrere GB, .git die volle Historie).
+.git
+data/
+board/
+night/
+experiments/
+docs/
+viz/
+scraper/
+scripts/
+md/
+viewer/
+vendor/
+node_modules
+*.log
+*.maps
