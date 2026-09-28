@@ -151,8 +151,7 @@ Port. Wer sie je Fenster frei einstellen will, muss `inf_d0.do_POST` erlauben,
 # eigener Server, Modell spielt gegen die eingebauten Bots
 http://localhost:9000/?ki=1&inf=http://127.0.0.1:8650&takt=32
 
-# öffentliche Lobby (nur auf arch, das ist die markierte IP)
-http://localhost:9000/?ki=1&oeffentlich=1&inf=http://127.0.0.1:8650
+# öffentliche Lobby: gesperrt, siehe Abschnitt weiter unten
 ```
 
 Das Einzelfenster zeigt die **normale Oberfläche**, nicht die Zuschauer-Ansicht, und die
