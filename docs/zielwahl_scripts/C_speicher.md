@@ -266,16 +266,3 @@ Früher Abbruch: Liegt nach ~20k Schritten (~53 min) M@16 nicht signifikant übe
 - ICC 0,09 ist angenommen.
 
 ---
-
-## Telemetrie
-- **Gelesene Dateien: ~38.**
-  - Prompt
-  - Projekt: `materialize.ts`, `extract.ts`, `obs.ts`, `dataset.py`, `featurize.py`, `check_shards.py`, `eval_spatial.py`, `actions.py`, `net.py`, `measure.ts`, `bench_obs.ts`, `bc_train.py`/`bc_fit.py` (grep), `mat_launch.py`, `start_fleet_v2.sh`, `run_v2.sh`, `collect_v2.sh`, COMPUTE_PLAN, INTENTS, SESSION_HANDOFF, STATUS, AUSFALL, `lauf2/README`
-  - 6 Memories
-  - Engine-Clone: `GameRunner.ts`, `GameImpl.ts`, `GameUpdates.ts`, `TerrainMapLoader.ts`, `GameMap.ts`
-  - Daten: 119 Karten-Manifeste, 65 lokale Records, `index.sqlite`
-- **Skripte** (`amssp/scripts_C/`): `bench_encoder.mjs`, `synth_storage.py`, `synth_tier2.py`, `ci_math.py`, `totals.py`. Dazu 3 Inline-Analysen: Record-Profil, Anteil der handelnden Ticks, sqlite.
-- **Verifiziert:** heutiges Shard-Format und Felder; fehlende smallID/Tick/Karte/Commit; Spawnphasen-Gate; Engine-HEAD liefert Tile-Updates als Uint32-Paare und `tickExecutionDuration` im Callback; Kartengrössen; 27 % Ticks mit Handlung; Anteil räumlicher Intents; CI-Arithmetik.
-- **Synthetisch gemessen:** scanTick-Kosten, Kompressionsgrössen (Ausschnitte, Masken, Keyframes, Wechselstrom), Rekonstruktionsgeschwindigkeit, Messlatte gleichverteilt-legal.
-- **Geschätzt:** Kostenanteil der Simulation (~5 %), Kosten eines schlanken Replays, Wechsel pro Landkachel, Anzahl räumlicher Samples, Einheiten-Stromgrösse, Zusatz-CPU, Eval-Laufzeit.
-- **Nicht gemessen:** echte Shards (lokal nicht vorhanden), echter Engine-Lauf (keine Abhängigkeiten, kein Netz).
