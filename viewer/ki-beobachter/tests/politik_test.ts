@@ -285,10 +285,10 @@ test("Standard ist Zuschauen: der Kern bekommt nichts", async () => {
   }
 });
 
-test("nach dem Ablaufdatum: kein Senden, Grund im Klartext", async () => {
+test("oeffentliche Partien gesperrt: kein Senden, Grund im Klartext", async () => {
   const dom = setzeDom();
   try {
-    assert.equal(erlaubnisGueltig(new Date("2026-09-13T11:59:59")), true);
+    assert.equal(erlaubnisGueltig(new Date("2026-09-13T11:59:59")), false);
     assert.equal(erlaubnisGueltig(new Date("2026-09-13T12:00:01")), false);
     const kern = new AttrappenKern(beobachtungMitBau());
     const p = new Politik(kern, {
@@ -302,8 +302,8 @@ test("nach dem Ablaufdatum: kein Senden, Grund im Klartext", async () => {
     await kern.tickeAn(96);
     assert.equal(kern.gesendet.length, 0);
     const grund = p.darfSenden();
-    assert.match(grund ?? "", /Kennzeichnung/);
-    assert.match(grund ?? "", /abgelaufen/);
+    assert.match(grund ?? "", /öffentlichen Partien/);
+    assert.match(grund ?? "", /weder erlaubt noch fair/);
     const m = p.messwerte(kern.beob);
     assert.equal(m.erlaubnis_gueltig, false);
     assert.match(m.letzte_aktion ?? "", /gesperrt/);

@@ -13,7 +13,7 @@
  */
 import type { Kern } from "./schnittstelle.ts";
 import type { Messwerte, PolitikOpts } from "./politik.ts";
-import { erlaubnisEnde, ERLAUBNIS, Politik } from "./politik.ts";
+import { ERLAUBNIS, Politik } from "./politik.ts";
 
 const KLAPP_SCHLUESSEL = "ki-einblendung-offen";
 
@@ -118,12 +118,10 @@ export function baueEinblendung(
   const kProtokoll = knopf("Protokoll zeigen", () => zeigeProtokoll());
   leiste.append(kAnhalten, kSenden, kProtokoll);
 
-  // Zeile 3: Erlaubnis und Ablauf
+  // Zeile 3: Sperre für öffentliche Partien
   const grenze = document.createElement("div");
   grenze.style.cssText = "color:" + FARBE.grau + ";padding-top:3px";
-  grenze.textContent =
-    `Erlaubnis: ${ERLAUBNIS.von}, ${ERLAUBNIS.am} — gültig bis ` +
-    erlaubnisEnde().toLocaleString("de-CH");
+  grenze.textContent = `Öffentliche Partien: gesperrt. ${ERLAUBNIS.art}`;
 
   const hinweis = document.createElement("div");
   hinweis.style.cssText = "color:" + FARBE.gelb + ";padding-top:3px;display:none";

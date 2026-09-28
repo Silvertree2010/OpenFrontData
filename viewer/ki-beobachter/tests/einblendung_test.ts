@@ -84,23 +84,22 @@ test("Knöpfe: anhalten/weiterlaufen und der gesperrte Senden-Schalter", () => {
     assert.equal(p.istAngehalten(), false);
 
     const senden = knoepfe[1];
-    // SENDEN_AN ist aus → der Schalter ist gesperrt und sagt warum.
+    // Öffentliche Partien sind gesperrt → der Schalter ist aus und sagt warum.
     assert.equal(senden.disabled, true);
     senden.klick();
     assert.equal(p.sendetGerade(), false);
-    assert.ok(alsKnoten(e.wurzel).textContent.includes("SENDEN_AN"), alsKnoten(e.wurzel).textContent);
+    assert.ok(alsKnoten(e.wurzel).textContent.includes("öffentlichen Partien"), alsKnoten(e.wurzel).textContent);
   } finally {
     dom.aufraeumen();
   }
 });
 
-test("Erlaubnis und Ablaufdatum stehen im Bild", () => {
+test("Sperre für öffentliche Partien steht im Bild", () => {
   const { dom, p } = aufbau();
   try {
     const e = baueEinblendung(p, alsHtml(dom.body));
     const t = alsKnoten(e.wurzel).textContent;
-    assert.ok(t.includes("Erlaubnis"), t);
-    assert.match(t, /13\.0?9\.2026/, t); // Ablaufdatum der Bot-Kennzeichnung
+    assert.ok(t.includes("gesperrt"), t);
   } finally {
     dom.aufraeumen();
   }

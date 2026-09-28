@@ -66,33 +66,34 @@ export const BIT: Record<string, number> = {
 /** Gruppen, die einen Zielspieler haben (Entwurf D0 §4.1). */
 export const ZIEL_GRUPPEN = new Set(["boot", "atom", "wasserstoff", "mirv"]);
 
-// ── Die Erlaubnis, portiert aus `oeffentlicheLobby.ts` ────────────────────────
+// ── Sperre für öffentliche Partien ───────────────────────────────────────────
+// In öffentlichen Partien von OpenFront ist ein Bot nicht erlaubt und auch nicht in
+// Ordnung: Mitspieler sitzen dort gegen einen Menschen, nicht gegen ein Netz. Die
+// Politik sendet deshalb nichts. Wer die Erweiterung benutzen will, nimmt eine eigene
+// Lobby oder eine eigene Serverinstanz.
 export const ERLAUBNIS = {
-  erteilt: true,
-  von: "Entwickler von OpenFront (openfrontio)",
-  am: "2026-09-12",
+  erteilt: false,
+  von: "niemand",
+  am: "",
   art:
-    "Serverseitig: die spielende IP ist als Bot markiert. Mitspieler sehen ein " +
-    "Roboter-Emoji im Namen und „AI“ statt „player“. Die Kennzeichnung kommt vom " +
-    "Server, nicht von dieser Erweiterung.",
-  /** Danach ist die IP nicht mehr gekennzeichnet — dann wird nicht mehr gesendet. */
-  laeuftAbAm: "2026-09-13T12:00:00",
+    "Kein Einsatz in öffentlichen Partien. Nur eigene Lobbys oder eine eigene " +
+    "Serverinstanz, in denen alle Beteiligten wissen, dass ein Netz mitspielt.",
+  laeuftAbAm: "1970-01-01T00:00:00",
 };
 
 export function erlaubnisEnde(): Date {
   return new Date(ERLAUBNIS.laeuftAbAm);
 }
 
-export function erlaubnisGueltig(jetzt: Date = new Date()): boolean {
-  return ERLAUBNIS.erteilt && jetzt.getTime() < erlaubnisEnde().getTime();
+export function erlaubnisGueltig(_jetzt: Date = new Date()): boolean {
+  return false;
 }
 
 export function abgelaufenText(): string {
   return (
-    "Die Bot-Kennzeichnung der IP galt bis " +
-    erlaubnisEnde().toLocaleString("de-CH") +
-    ". Sie ist abgelaufen: ohne Kennzeichnung wäre das ein unmarkierter Bot unter " +
-    "Menschen. Die Politik sendet darum nichts mehr."
+    "In öffentlichen Partien spielt diese Erweiterung nicht mit. Ein unmarkierter Bot " +
+    "unter Menschen ist weder erlaubt noch fair. Für eigene Lobbys ERLAUBNIS.erteilt " +
+    "selbst setzen und die Verantwortung dafür übernehmen."
   );
 }
 

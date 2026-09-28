@@ -123,11 +123,13 @@ nur Clients an, deren Kennung seiner entspricht), `SERVER_HOST=openfront.io`,
 im Dev-Modus schickt der Client **gar keinen** Turnstile-Token, das war die Ursache des
 „unauthorized token". Captcha und Anmeldung laufen ganz normal im Browser.
 
-### Zeitgrenze
+### Öffentliche Partien: nicht benutzen
 
-Die Bot-Kennzeichnung der IP gilt laut Entwickler nur bis **13.09.2026, 12:00 Uhr**.
-`ERLAUBNIS.laeuftAbAm` in `src/client/oeffentlicheLobby.ts` hält das fest; danach
-verweigert `oeffentlichAnmelden()` den Dienst mit Begründung, und eine laufende Partie
-bekommt in der Einblendung den Hinweis, sie zu Ende zu spielen und aufzuhören.
-Erlaubnis im Wortlaut, inklusive „ye sure" und der Zustimmung zum Build mit der
-ausgelieferten Kennung, steht in `ERLAUBNIS`.
+Ein Netz, das in öffentlichen Partien gegen Menschen spielt, ist ein Bot unter Menschen.
+Das ist nach den Regeln von OpenFront nicht erlaubt und unabhängig davon nicht in Ordnung:
+die Mitspieler haben sich für eine Partie gegen Menschen angemeldet.
+
+`politik.ts` hält das fest: `ERLAUBNIS.erteilt` ist `false` und `erlaubnisGueltig()` gibt
+immer `false` zurück, die Politik sendet also nichts. Wer die Erweiterung ausprobieren
+will, nimmt eine eigene Lobby oder eine eigene Serverinstanz, in der alle Beteiligten
+wissen, dass ein Netz mitspielt.

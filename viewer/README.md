@@ -167,12 +167,8 @@ selbst; ab dem Ende der Startphase spielt das Modell (`spawnSelbst=false` in
 `aiKonfig.ts`, ausgewertet in `Worker.worker.ts`). In der Einblendung laufen die Spieldauer
 und ein Knopf „Partie verlassen" mit.
 
-**Öffentliche Lobbys sind eingeschaltet** — der Entwickler hat am 12.09.2026 zugestimmt,
-die spielende IP ist serverseitig als Bot markiert (Roboter-Emoji, „AI" statt „player").
-Belege und Grenzen stehen im Kopf von `src/client/oeffentlicheLobby.ts`: genau **eine**
-Instanz gleichzeitig (im Fenster und über Tabs hinweg gesperrt), eingebettete Fenster sind
-ausgeschlossen, keine Verschleierung der Herkunft. Keine automatische Abbruchgrenze — wer
-mitten in der Partie verschwindet, hinterlässt ein totes Volk und stört mehr als einer, der
-zu Ende spielt. Protokoll je Partie (Beginn, Spiel-ID, Dauer, Ergebnis, wie beendet) im
-`localStorage` unter `openfront-ki-oeffentlich-protokoll`, zum Vorzeigen in der Konsole mit
-`kiProtokoll()`.
+**Öffentliche Lobbys sind gesperrt.** Ein Netz, das dort gegen Menschen spielt, ist ein Bot
+unter Menschen: nach den Regeln von OpenFront nicht erlaubt und den Mitspielern gegenüber
+nicht fair. `politik.ts` gibt in `erlaubnisGueltig()` immer `false` zurück, die Politik
+sendet also keine Züge. Gedacht ist die Erweiterung für eigene Lobbys oder eine eigene
+Serverinstanz, in der alle wissen, dass ein Netz mitspielt.

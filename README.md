@@ -33,7 +33,7 @@ KI-Spielern gleichzeitig. Die Netze antworten über einen HTTP-Inferenzserver
 
 Voraussetzungen: Node 22+, Python 3.12+ mit PyTorch, eine NVIDIA-GPU für das Training.
 Die Spiel-Engine selbst liegt nicht hier; sie wird als `vendor/openfront` daneben ausgecheckt
-(Version v0.34 der Engine, siehe `viewer/arena/README` und die Patches in `viewer/*.patch`).
+(Version v0.34 der Engine, siehe `viewer/arena/README`).
 
 ```bash
 # Inferenzserver mit einem Checkpoint aus dem Release
@@ -63,13 +63,23 @@ Im Release liegen die Netze, damit niemand die Vorstufen nachbauen muss:
 | `rl10_i80.pt` | bester Lauf mit vollen Lobbys, Selbstspiel |
 | `rl11_i40.pt`, `rl11_i64.pt` | letzter Lauf, Training gegen einen Pool alter Netze |
 
+## Nicht in öffentlichen Partien einsetzen
+
+`viewer/ki-beobachter/` kann ein Netz in einer laufenden Partie spielen lassen. In den
+öffentlichen Lobbys von OpenFront ist das nicht erlaubt, und davon abgesehen ist es den
+Mitspielern gegenüber nicht fair: Sie haben sich für eine Partie gegen Menschen angemeldet.
+Der Code ist deshalb gesperrt, `erlaubnisGueltig()` gibt immer `false` zurück und es werden
+keine Züge gesendet. Gedacht ist die Erweiterung für eigene Lobbys, eine eigene
+Serverinstanz oder die Arena, wo ohnehin nur Netze und Bots spielen. Wer die Sperre
+aufhebt, tut das auf eigene Verantwortung und gegen die Empfehlung dieses Projekts.
+
 ## Verzeichnisse
 
 | Ordner | Inhalt |
 |---|---|
 | `trainer/` | Training, RL-Schleife, Inferenzserver, Belohnung, Tests |
 | `viewer/arena/` | Arena: Partien in der Engine, ohne Browser |
-| `viewer/ki-beobachter/` | Browser-Erweiterung, die ein Netz in einer Live-Partie spielen lässt |
+| `viewer/ki-beobachter/` | Browser-Erweiterung, die ein Netz mitspielen lässt; für öffentliche Partien gesperrt |
 | `materializer/` | Replay zu Trainingsdaten, Format v2 |
 | `scraper/`, `night/` | Partien sammeln, täglicher Sammel- und Materialisierlauf |
 | `env/` | Beobachtungscodierung, Datensatz, Netzdefinitionen |
