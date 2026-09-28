@@ -9,6 +9,22 @@ Der Agent ist ungefähr so stark wie ein durchschnittlicher menschlicher Spieler
 Ausgangsversion deutlich, aber er gewinnt keine Partien gegen starke Menschen. Was gemessen wurde und was
 nicht funktioniert hat, steht in [ERGEBNISSE.md](ERGEBNISSE.md).
 
+## Warum das Projekt eingestellt wurde
+
+Zwei Gründe, beide unspektakulär.
+
+Erstens waren keine deutlichen Fortschritte mehr zu sehen. Die letzten Läufe verbesserten sich nur noch in
+einer Grössenordnung, die man mit 100 gepaarten Partien kaum von Rauschen unterscheiden kann. Der Schritt
+von "so gut wie ein durchschnittlicher Spieler" zu "so gut wie ein guter Spieler" hätte an der Belohnung
+und am Aktionsraum grössere Umbauten verlangt, nicht mehr Iterationen.
+
+Zweitens brauchte das Training den Rechner. Die Läufe belegten die GPU tagelang am Stück, und der PC
+sollte wieder ein PC sein statt eine Trainingsmaschine.
+
+Deshalb liegt hier alles offen: Code, Netze, Messtechnik und Daten. Wer weitermachen will, fängt nicht bei
+null an, sondern bei einem Agenten, der bereits spielt, und einer Messvorrichtung, die sagt, ob eine
+Änderung etwas gebracht hat.
+
 ## Aufbau
 
 Vier Stufen, jede für sich benutzbar:
